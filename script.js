@@ -4,16 +4,24 @@ const FRAME_WIDTH = 124;  // Ancho de UN frame (ej: 32px)
 const FRAME_HEIGHT = 124; // Alto de UN frame (ej: 32px)
 // ----------------------------------------------------
 
+const BG_SPRITE_SHEET_FILE = 'fondo.png'; 
+const BG_FRAME_WIDTH = 512;   // Ancho de UN frame de fondo
+const BG_FRAME_HEIGHT = 1024; // Alto de UN frame de fondo
+const BG_NUM_FRAMES = 3;      // Número de frames de fondo
+const BG_FRAME_RATE = 0.1;    // Velocidad de animación de fondo
+const CANVAS_SCALE = 0.9; // 90% del ancho de la ventana
+const PLAYER_SCALE_FACTOR = 1.1; // Un poco más chico
+
+
 // --- Configuración del Mandala ---
-const MANDALA_MAX_RADIUS = 250; 
-const MANDALA_STROKE_WEIGHT = 4; 
+const MANDALA_MAX_RADIUS = 1050; 
+const MANDALA_STROKE_WEIGHT = 15; 
 // ----------------------------------------------------
 
-// --- ¡NUEVO! Escala del Player ---
-const PLAYER_SCALE_FACTOR = 1.25; // <-- ¡AQUÍ! 1.0 = 100%, 1.25 = 125%
-// ----------------------------------------------------
+let bgSpriteSheet;
+let bgCurrentFrame = 0.0;
 
-// --- Variables Globales ---
+// --- Variables Globales --- 
 let player;
 let playerSpriteSheet; 
 let numPlayerFrames = 4; 
@@ -27,16 +35,13 @@ let mandalaFade = 0.0;
 let mandalaHue = 0; 
 let mandalaPos; 
 
-// Variables para las olas
-let waveOffset = 0; 
-let waveAmplitude = 10; 
-let waveFrequency = 0.02; 
-let baseHue = 180; 
+ 
 
 // --- Precarga de Recursos ---
 function preload() {
   try {
     playerSpriteSheet = loadImage(SPRITE_SHEET_FILE);
+    bgSpriteSheet = loadImage(BG_SPRITE_SHEET_FILE);
   } catch (e) {
     console.error("No se pudo cargar el archivo: " + SPRITE_SHEET_FILE);
     console.error("Asegúrate de que el archivo esté subido al editor p5.js.");
@@ -45,9 +50,16 @@ function preload() {
 
 // --- Configuración Inicial ---
 function setup() {
-  createCanvas(800, 600); 
-  colorMode(HSB, 360, 100, 100); 
+    let w = windowWidth * CANVAS_SCALE;
+  let h = windowHeight * 0.85;
+
+  // Crear canvas más chico y centrado
+  let cnv = createCanvas(w, h);
+  cnv.position((windowWidth - w) / 2, (windowHeight - h) / 2);
   noSmooth();
+  colorMode(HSB, 360, 100, 100);
+  noStroke();
+  document.body.style.overflow = 'hidden';
   
   // --- <<< ¡CAMBIOS AQUÍ! >>> ---
   // 1. Centrado en Y (height / 2)
@@ -59,19 +71,58 @@ function setup() {
     FRAME_HEIGHT * PLAYER_SCALE_FACTOR // <-- Más grande
   ); 
 
+
   mandalaPos = createVector(width / 2, height / 2);
   mandalaTimer = millis();
+
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  player.x = constrain(player.x, player.width / 2 + player.safeMargin, width - player.width / 2 - player.safeMargin);
+  player.y = constrain(player.y, player.height / 2 + player.safeMargin, height - player.height / 2 - player.safeMargin);
+  mandalaPos.set(width / 2, height / 2);
 }
 
 // --- Bucle Principal de Dibujo ---
 function draw() {
-  drawWaves(); 
+  drawBackgroundSprite();
   
   player.update(); 
   player.display(); 
 
   updateMandala();
   drawMandala();
+}
+
+function drawBackgroundSprite() {
+  if (!bgSpriteSheet) {
+    background(0); // Fondo negro si no se carga
+    return;
+  }
+  
+  // 1. Calcular el frame actual
+  // Usamos floor() para obtener el índice entero (0, 1, o 2)
+  let frameIndex = floor(bgCurrentFrame);
+  
+  // 2. Calcular la posición (sx) en el sprite sheet
+  let sx = frameIndex * BG_FRAME_WIDTH;
+  let sy = 0; // Asumimos que es una tira horizontal
+
+  // 3. Dibujar la imagen
+  // image(img, dx, dy, dWidth, dHeight, sx, sy, sWidth, sHeight)
+  imageMode(CORNER); // Aseguramos dibujar desde la esquina
+  image(
+    bgSpriteSheet,
+    0, 0,           // Posición en el canvas (esquina superior izq)
+    width, height,  // Tamaño en el canvas (llenar la pantalla)
+    sx, sy,         // Posición en el sprite sheet (frame actual)
+    BG_FRAME_WIDTH, BG_FRAME_HEIGHT // Tamaño del frame original
+  );
+
+  // 4. Actualizar el contador de frame para la próxima vez
+  // Sumamos la velocidad (0.5) y usamos % (módulo) para ciclar
+  bgCurrentFrame = (bgCurrentFrame + BG_FRAME_RATE) % BG_NUM_FRAMES;
 }
 
 // --- Clase Player (SIN el pulso) ---
@@ -166,7 +217,7 @@ function drawMandala() {
   strokeWeight(MANDALA_STROKE_WEIGHT); 
   noFill(); 
   
-  let petals = 8; 
+  let petals = 12; 
   let currentRadius = MANDALA_MAX_RADIUS * mandalaFade; 
   let currentAlpha = 255 * mandalaFade; 
   
@@ -187,7 +238,7 @@ function drawMandala() {
 
 // --- Función para Dibujar las Olas del Mar (SIN CAMBIOS) ---
 function drawWaves() {
-  waveOffset += 0.01; 
+  waveOffset += 0.05; 
   noStroke(); 
   
   fill(baseHue + 20, 80, 90); 
