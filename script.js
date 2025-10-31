@@ -21,6 +21,14 @@ const MANDALA_DURATION = 1000;let mandalaFade = 0.0;
 let mandalaHue = 0;let mandalaPos;
 let cnvEl = null;let currentScale = 1;
 
+// --- NUEVAS CONSTANTES Y ESTADO PARA DOBLE-TAP / SPRINT ---
+const BASE_SPEED = 3;                // velocidad base (era 3 en tu código)
+const RUN_MULTIPLIER = 2;            // multiplicador de velocidad al correr
+const DOUBLE_TAP_MS = 300;           // ventana para considerar doble-tap (ms)
+let lastKeyTime = { left:0, right:0, up:0, down:0 }; // timestamps últimos pulsos
+let runCooldownUntil = { left:0, right:0, up:0, down:0 }; // bloqueo tras activar
+let runActive = { left:false, right:false, up:false, down:false };
+
 function preload() {
   try {
     playerSpriteSheet = loadImage(SPRITE_SHEET_FILE);bgSpriteSheet = loadImage(BG_SPRITE_SHEET_FILE);
@@ -76,26 +84,50 @@ function windowResized() {
   mandalaPos.set(width / 2, height / 2);
 }
 
+// --- NUEVAS FUNCIONES DE TECLADO: detectar doble-tap y liberar sprint ---
+function _dirFromKeyEvent() {
+  // devuelve 'left'|'right'|'up'|'down' o null según la tecla actual (p5: key y keyCode)
+  if (keyCode === LEFT_ARROW || key === 'a' || key === 'A') return 'left';
+  if (keyCode === RIGHT_ARROW || key === 'd' || key === 'D') return 'right';
+  if (keyCode === UP_ARROW || key === 'w' || key === 'W') return 'up';
+  if (keyCode === DOWN_ARROW || key === 's' || key === 'S') return 'down';
+  return null;
+}
 
+function keyPressed() {
+  const dir = _dirFromKeyEvent();
+  if (!dir) return;
+  const now = millis();
 
+  // si estamos en cooldown para esa dirección, solo actualizamos lastKeyTime
+  if (runCooldownUntil[dir] && now < runCooldownUntil[dir]) {
+    lastKeyTime[dir] = now;
+    return;
+  }
 
+  if (lastKeyTime[dir] && (now - lastKeyTime[dir]) <= DOUBLE_TAP_MS) {
+    // doble-tap detectado -> activar sprint para esa dirección mientras se mantenga la tecla
+    runActive[dir] = true;
+    // poner un pequeño cooldown para evitar re-trigger inmediato
+    runCooldownUntil[dir] = now + DOUBLE_TAP_MS;
+    lastKeyTime[dir] = 0; // reset
+  } else {
+    lastKeyTime[dir] = now;
+  }
+}
 
-
-
+function keyReleased() {
+  const dir = _dirFromKeyEvent();
+  if (!dir) return;
+  // Al soltar la tecla desactivamos sprint para esa dirección
+  runActive[dir] = false;
+}
 
 function draw() {
   drawBackgroundSprite();
   player.update();player.display();
   updateMandala();drawMandala();
 }
-
-
-
-
-
-
-
-
 
 function drawBackgroundSprite() {
   if (!bgSpriteSheet) {
@@ -114,12 +146,33 @@ class Player {
   }
 
   update() {
-    if (keyIsDown(LEFT_ARROW)) {this.x -= 3;}
-    if (keyIsDown(RIGHT_ARROW)) {this.x += 3;}
-    if (keyIsDown(UP_ARROW)) {this.y -= 3;}
-    if (keyIsDown(DOWN_ARROW)) {this.y += 3;}
+    // MOVIMIENTO: soporta flechas + WASD y sprint por doble-tap
+    // Calculamos velocidad por eje según si hay sprint activo para esa dirección
+    let leftDown = keyIsDown(LEFT_ARROW) || keyIsDown(65);   // 65 = 'A'
+    let rightDown = keyIsDown(RIGHT_ARROW) || keyIsDown(68); // 68 = 'D'
+    let upDown = keyIsDown(UP_ARROW) || keyIsDown(87);       // 87 = 'W'
+    let downDown = keyIsDown(DOWN_ARROW) || keyIsDown(83);   // 83 = 'S'
+
+    if (leftDown) {
+      const speed = BASE_SPEED * (runActive.left ? RUN_MULTIPLIER : 1);
+      this.x -= speed;
+    }
+    if (rightDown) {
+      const speed = BASE_SPEED * (runActive.right ? RUN_MULTIPLIER : 1);
+      this.x += speed;
+    }
+    if (upDown) {
+      const speed = BASE_SPEED * (runActive.up ? RUN_MULTIPLIER : 1);
+      this.y -= speed;
+    }
+    if (downDown) {
+      const speed = BASE_SPEED * (runActive.down ? RUN_MULTIPLIER : 1);
+      this.y += speed;
+    }
+
     this.x = constrain(this.x, this.width / 2, width - this.width / 2);
     this.y = constrain(this.y, this.height / 2, height - this.height / 2);
+
     this.animationCounter++;
     if (this.animationCounter >= playerFrameRate) {this.currentFrame = (this.currentFrame + 1) % numPlayerFrames;this.animationCounter = 0;}
   }
