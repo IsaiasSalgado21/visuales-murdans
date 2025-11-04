@@ -21,7 +21,6 @@ const MANDALA_DURATION = 1000;let mandalaFade = 0.0;
 let mandalaHue = 0;let mandalaPos;
 let cnvEl = null;let currentScale = 1;
 
-// --- NUEVAS CONSTANTES Y ESTADO PARA DOBLE-TAP / SPRINT ---
 const BASE_SPEED = 3;                // velocidad base (era 3 en tu código)
 const RUN_MULTIPLIER = 2;            // multiplicador de velocidad al correr
 const DOUBLE_TAP_MS = 300;           // ventana para considerar doble-tap (ms)
@@ -29,9 +28,14 @@ let lastKeyTime = { left:0, right:0, up:0, down:0 }; // timestamps últimos puls
 let runCooldownUntil = { left:0, right:0, up:0, down:0 }; // bloqueo tras activar
 let runActive = { left:false, right:false, up:false, down:false };
 
+const ITEM_SPRITE_FILE = 'spr_capa.png';
+let itemSpriteSheet;
+let item;
+
 function preload() {
   try {
     playerSpriteSheet = loadImage(SPRITE_SHEET_FILE);bgSpriteSheet = loadImage(BG_SPRITE_SHEET_FILE);
+    itemSpriteSheet = loadImage(ITEM_SPRITE_FILE);
   } catch (e) {
     console.error("No se pudo cargar el archivo: " + SPRITE_SHEET_FILE);console.error("Asegúrate de que el archivo esté subido al editor p5.js.");}
 }
@@ -73,6 +77,9 @@ function setup() {
     FRAME_HEIGHT * PLAYER_SCALE_FACTOR
   );
 
+  // crear item en el centro de la pantalla
+  item = new Item(width / 2, height / 2, FRAME_WIDTH * PLAYER_SCALE_FACTOR, FRAME_HEIGHT * PLAYER_SCALE_FACTOR);
+
   mandalaPos = createVector(width / 2, height / 2);
   mandalaTimer = millis();
 }
@@ -106,9 +113,7 @@ function keyPressed() {
   }
 
   if (lastKeyTime[dir] && (now - lastKeyTime[dir]) <= DOUBLE_TAP_MS) {
-    // doble-tap detectado -> activar sprint para esa dirección mientras se mantenga la tecla
     runActive[dir] = true;
-    // poner un pequeño cooldown para evitar re-trigger inmediato
     runCooldownUntil[dir] = now + DOUBLE_TAP_MS;
     lastKeyTime[dir] = 0; // reset
   } else {
@@ -119,13 +124,13 @@ function keyPressed() {
 function keyReleased() {
   const dir = _dirFromKeyEvent();
   if (!dir) return;
-  // Al soltar la tecla desactivamos sprint para esa dirección
   runActive[dir] = false;
 }
 
 function draw() {
   drawBackgroundSprite();
   player.update();player.display();
+  if (item) item.display();
   updateMandala();drawMandala();
 }
 
@@ -146,8 +151,6 @@ class Player {
   }
 
   update() {
-    // MOVIMIENTO: soporta flechas + WASD y sprint por doble-tap
-    // Calculamos velocidad por eje según si hay sprint activo para esa dirección
     let leftDown = keyIsDown(LEFT_ARROW) || keyIsDown(65);   // 65 = 'A'
     let rightDown = keyIsDown(RIGHT_ARROW) || keyIsDown(68); // 68 = 'D'
     let upDown = keyIsDown(UP_ARROW) || keyIsDown(87);       // 87 = 'W'
@@ -183,6 +186,17 @@ class Player {
       let sx = this.currentFrame * FRAME_WIDTH;let sy = 0;
       image(playerSpriteSheet,this.x, this.y,this.width, this.height,sx, sy,FRAME_WIDTH, FRAME_HEIGHT);
     } else {fill(0, 100, 100);ellipse(this.x, this.y, this.width, this.height);}
+  }
+}
+
+class Item {
+  constructor(x, y, w, h) {this.x = x;this.y = y;this.w = w;this.h = h;this.frameRate = 8; }
+  display() {
+    if (!itemSpriteSheet) {push();fill(0, 0, 100);rectMode(CENTER);rect(this.x, this.y, this.w, this.h);pop();return;}
+    const totalFrames = max(1, floor(itemSpriteSheet.width / FRAME_WIDTH));
+    const t = millis() / (1000 / this.frameRate);const frameIndex = floor(t) % totalFrames;
+    const sx = frameIndex * FRAME_WIDTH;const sy = 0;
+    imageMode(CENTER);image(itemSpriteSheet, this.x, this.y, this.w, this.h, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
   }
 }
 
