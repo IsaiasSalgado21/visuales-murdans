@@ -29,6 +29,15 @@ let lastKeyTime = { left:0, right:0, up:0, down:0 }; // timestamps últimos puls
 let runCooldownUntil = { left:0, right:0, up:0, down:0 }; // bloqueo tras activar
 let runActive = { left:false, right:false, up:false, down:false };
 
+// HITBOX: array para modificar dimensiones y origen [ player, item ]
+// w,h = tamaño; ox,oy = offset (en píxeles) desde el centro del objeto
+let hitboxSizes = [
+  { w: FRAME_WIDTH * PLAYER_SCALE_FACTOR * 0.5, h: FRAME_HEIGHT * PLAYER_SCALE_FACTOR * 0.57, ox: 0, oy: 0 }, // player
+  { w: FRAME_WIDTH * PLAYER_SCALE_FACTOR * 0.3, h: FRAME_HEIGHT * PLAYER_SCALE_FACTOR * 0.4, ox: 0, oy: 0 }  // item
+];
+
+let showHitboxes = false; // toggle con la tecla "1"
+
 const ITEM_SPRITE_FILE = 'spr_capa.png';
 let itemSpriteSheet;
 let item;
@@ -110,6 +119,12 @@ function _dirFromKeyEvent() {
 }
 
 function keyPressed() {
+  // toggle hitbox mostrando/ocultando con la tecla '1'
+  if (key === '1') {
+    showHitboxes = !showHitboxes;
+    return;
+  }
+
   const dir = _dirFromKeyEvent();
   if (!dir) return;
   const now = millis();
@@ -139,7 +154,7 @@ function draw() {
   player.update();
 
   // nuevo: detectar colisión y activar fondo nocturno sin detener animaciones
-  if (item && checkCollision(player, item)) {
+  if (item && checkCollision(player, item, 0, 1)) {
     isNight = true;
   }
 
@@ -149,6 +164,12 @@ function draw() {
   // luego dibujar actor y item (las animaciones siguen)
   player.display();
   if (item) item.display();
+
+  // si está activado, dibujar las hitboxes usando hitboxSizes
+  if (showHitboxes) {
+    drawHitboxes();
+  }
+
   updateMandala();
   drawMandala();
 }
@@ -265,11 +286,45 @@ function drawMandala() {
   pop();
 }
 
-// nueva función de colisión por bounding boxes centradas
-function checkCollision(p, it) {
-  const dx = Math.abs(p.x - it.x);
-  const dy = Math.abs(p.y - it.y);
-  const overlapX = dx < (p.width + it.w) / 2;
-  const overlapY = dy < (p.height + it.h) / 2;
+// nueva función: dibuja hitboxes centradas + offsets para player (index 0) y item (index 1)
+function drawHitboxes() {
+  push();
+  noFill();
+  strokeWeight(2);
+  rectMode(CENTER);
+
+  // player hitbox (rojo)
+  stroke(0, 100, 100);
+  const hp = hitboxSizes[0];
+  rect(player.x + (hp.ox || 0), player.y + (hp.oy || 0), hp.w, hp.h);
+
+  // item hitbox (azul)
+  stroke(200, 100, 100);
+  const hi = hitboxSizes[1];
+  rect(item.x + (hi.ox || 0), item.y + (hi.oy || 0), hi.w, hi.h);
+
+  pop();
+}
+
+// nueva versión de checkCollision que usa hitboxSizes con offsets (índices opcionales)
+function checkCollision(p, it, pIndex = 0, iIndex = 1) {
+  const hp = hitboxSizes[pIndex];
+  const hi = hitboxSizes[iIndex];
+
+  const px = p.x + (hp.ox || 0);
+  const py = p.y + (hp.oy || 0);
+  const ix = it.x + (hi.ox || 0);
+  const iy = it.y + (hi.oy || 0);
+
+  const bw = hp.w;
+  const bh = hp.h;
+  const iw = hi.w;
+  const ih = hi.h;
+
+  const dx = Math.abs(px - ix);
+  const dy = Math.abs(py - iy);
+
+  const overlapX = dx < (bw + iw) / 2;
+  const overlapY = dy < (bh + ih) / 2;
   return overlapX && overlapY;
 }
