@@ -68,6 +68,95 @@ const ATTACHED_OFFSET_X = 12;   // distancia horizontal desde el centro del juga
 const ATTACHED_OFFSET_Y = 6;    // altura relativa al centro del jugador (en px)
 const ATTACHED_FOLLOW_LERP = 0.22; // 0..1, qué tan rápido sigue la capa
 
+// --- CÁMARA / PARALLAX ---
+let camX = 0, camY = 0;          // posición de cámara (mundo)
+let camZoom = 1;                // zoom actual
+let targetZoom = 1;             // (ya no usado para zoom dramatic)
+const PARALLAX_ZOOM_FACTOR = 0.02;
+const CAM_LERP = 0.08;
+const ZOOM_LERP = 0.06;
+
+// --- Toggle de parallax ---
+let parallaxEnabled = true; // true = cámara/parallax activo, false = visión "normal" (sin parallax)
+
+// --- NUEVO: ZOOM DRAMÁTICO AL PONER/QUITAR CAPA ---
+let zoomPhase = 'idle';         // 'idle' | 'in' | 'out'
+let zoomStartTime = 0;
+let zoomFrom = 1;
+let zoomTo = 1;
+const BASE_ZOOM = 1.0;
+const EQUIP_ZOOM = 1.28;        // zoom dramático objetivo al ponérsela
+const ZOOM_IN_DURATION = 1000;  // ms -> subida lenta
+const ZOOM_OUT_DURATION = 300;  // ms -> bajada más rápida
+
+function setZoomPhase(phase) {
+  zoomPhase = phase;
+  zoomStartTime = millis();
+  zoomFrom = camZoom;
+  if (phase === 'in') zoomTo = EQUIP_ZOOM;
+  else if (phase === 'out') zoomTo = BASE_ZOOM;
+}
+
+function initCamera() {
+  camX = player.x;
+  camY = player.y;
+  camZoom = BASE_ZOOM;
+  targetZoom = BASE_ZOOM;
+}
+
+function updateCamera() {
+  // seguir posición suavemente
+  camX = lerp(camX, player.x, CAM_LERP);
+  camY = lerp(camY, player.y, CAM_LERP);
+
+  // gestionar zoom por fases con easing temporal
+  if (zoomPhase === 'in') {
+    const elapsed = millis() - zoomStartTime;
+    const t = constrain(elapsed / ZOOM_IN_DURATION, 0, 1);
+    // easing suave (smoothstep) para subida lenta
+    const eased = t * t * (3 - 2 * t);
+    camZoom = lerp(zoomFrom, zoomTo, eased);
+    if (t >= 1) {
+      camZoom = zoomTo;
+      zoomPhase = 'idle';
+    }
+  } else if (zoomPhase === 'out') {
+    const elapsed = millis() - zoomStartTime;
+    const t = constrain(elapsed / ZOOM_OUT_DURATION, 0, 1);
+    // easing rápido en la bajada (easeOut cubic)
+    const eased = 1 - Math.pow(1 - t, 3);
+    camZoom = lerp(zoomFrom, zoomTo, eased);
+    if (t >= 1) {
+      camZoom = zoomTo;
+      zoomPhase = 'idle';
+    }
+  } else {
+    // sin fase: mantener a base o lerpear mínimo por si algo más lo controla
+    camZoom = lerp(camZoom, BASE_ZOOM, ZOOM_LERP * 0.5);
+  }
+}
+
+// aplicar transform para una capa con 'depth' en [0..1]
+// depth = 0 => muy lejos (se mueve poco), depth = 1 => pegado a la cámara (se mueve todo)
+// opcional extraZoom para ajustar la escala local de la capa
+function applyLayer(depth, extraZoom = 1) {
+  push();
+  // centrar en pantalla
+  translate(width / 2, height / 2);
+  // efecto de zoom por capa: capas más lejanas pueden tener zoom levemente distinto
+  const layerZoom = camZoom * (1 + (1 - depth) * PARALLAX_ZOOM_FACTOR) * extraZoom;
+  scale(layerZoom);
+  // mover el mundo en función de la cámara y la profundidad (parallax)
+  // capas con depth=1 se centran en camX/camY (siguen al jugador),
+  // depth=0 prácticamente no se mueven respecto al mundo.
+  translate(-camX * depth, -camY * depth);
+}
+
+// cierra la transform de capa
+function endLayer() {
+  pop();
+}
+
 function preload() {
   try {
     playerSpriteSheet = loadImage(SPRITE_SHEET_FILE);
@@ -129,6 +218,9 @@ function setup() {
 
   mandalaPos = createVector(player.x, player.y);
   mandalaTimer = millis();
+
+  // inicializar cámara con la posición inicial del jugador
+  initCamera();
 }
 
 function windowResized() {
@@ -150,6 +242,21 @@ function keyPressed() {
   // toggle hitbox mostrando/ocultando con la tecla '1'
   if (key === '1') {
     showHitboxes = !showHitboxes;
+    return;
+  }
+  // toggle parallax con la tecla '2'
+  if (key === '2') {
+    parallaxEnabled = !parallaxEnabled;
+    // opcional: cuando activas parallax, inicializa cámara para evitar saltos bruscos
+    if (parallaxEnabled) {
+      // mantener camZoom y permitir que updateCamera lo acomode; iniciar cam cerca del jugador
+      camX = player.x;
+      camY = player.y;
+    } else {
+      // al desactivar, aseguramos zoom base para que no quede ampliado en la vista normal
+      camZoom = BASE_ZOOM;
+      zoomPhase = 'idle';
+    }
     return;
   }
 
@@ -222,6 +329,7 @@ function draw() {
     capeTimer = CAPE_DURATION;
     bgBlendTarget = 1;
     setBlurPulse(MAX_BLUR, BLUR_DEFAULT_DURATION);
+    setZoomPhase('in');                // <-- añadido
     item.pickupLocked = true;
     // iniciar posición de la capa justo cerca del jugador para evitar "salto"
     const initDir = -side;
@@ -236,6 +344,7 @@ function draw() {
       capeEquipped = false;
       bgBlendTarget = 0;
       setBlurPulse(MAX_BLUR, BLUR_DEFAULT_DURATION);
+      setZoomPhase('out');               // <-- añadido
 
       item.attached = false;
       item.visible = true;
@@ -260,32 +369,57 @@ function draw() {
     item.y = lerp(item.y, targetY, ATTACHED_FOLLOW_LERP);
   }
 
-  // --- DIBUJADO: fondo y elementos en el orden correcto ---
-  // fondo (con crossfade)
+  // fondo (full canvas)
+  push();
+  resetMatrix();
   drawBackgroundSprite();
+  pop();
 
-  // mandala debe ir detrás del jugador y de la capa puesta
-  updateMandala();
-  drawMandala();
+  if (parallaxEnabled) {
+    // --- ACTUALIZAR CÁMARA y dibujado con parallax/zoom ---
+    updateCamera();
 
-  // NUEVO ORDEN: tabla debajo, luego capa attached (encima de la tabla), luego jugador (encima de la capa)
-  if (tablaSpriteSheet) {
-    drawTablaUnderPlayer(player);   // tabla primero (más abajo)
+    // mandala (muy cerca del jugador ahora)
+    applyLayer(0.98, 1.0);
+    updateMandala();
+    drawMandala();
+    endLayer();
+
+    // tabla (casi a la par del jugador)
+    applyLayer(0.99, 1.0);
+    if (tablaSpriteSheet) drawTablaUnderPlayer(player);
+    endLayer();
+
+    // capa attached (ligeramente debajo del jugador pero muy cercana)
+    applyLayer(0.995, 1.0);
+    if (item && item.attached) item.displayAttached(player);
+    endLayer();
+
+    // jugador (capa frontal, depth = 1 para seguir completamente)
+    applyLayer(1.0, 1.0);
+    player.display();
+    endLayer();
+
+    // item en suelo (por encima del jugador cuando no está attached), muy cercano
+    applyLayer(0.997, 1.0);
+    if (item && !item.attached) item.display();
+    endLayer();
+
+  } else {
+    // --- VISIÓN NORMAL sin parallax/zoom: dibujar objetos en coordenadas directas ---
+    updateMandala();
+    drawMandala();
+
+    if (tablaSpriteSheet) drawTablaUnderPlayer(player);
+
+    if (item && item.attached) item.displayAttached(player);
+
+    player.display();
+
+    if (item && !item.attached) item.display();
   }
 
-  if (item && item.attached) {
-    item.displayAttached(player);   // capa encima de la tabla
-  }
-
-  // dibujar jugador encima de la capa
-  player.display();
-
-  // si la capa NO está puesta en el jugador, dibujarla en su posición de suelo (por encima del jugador)
-  if (item && !item.attached) {
-    item.display();
-  }
-  
-  // UI / hitboxes / texto de estado
+  // UI / hitboxes / texto (NO afectadas por cámara -> dibujadas en pantalla)
   if (showHitboxes) {
     drawHitboxes();
 
@@ -299,6 +433,8 @@ function draw() {
     if (capeEquipped) {
       texto += `  (${(capeTimer/1000).toFixed(1)} s)`;
     }
+    // indicar estado del parallax
+    texto += `\nParallax: ${parallaxEnabled ? 'ACTIVADO' : 'DESACTIVADO'}`;
     text(texto, 10, 10);
     pop();
   }
@@ -346,6 +482,10 @@ function drawBackgroundSprite() {
   bgCurrentFrame = (bgCurrentFrame + BG_FRAME_RATE) % BG_NUM_FRAMES;
 }
 
+// --- Ajustes visuales: offset de dibujo del jugador ---
+const PLAYER_DRAW_OFFSET_X = -6; // mueve el sprite en X (ajusta para centrar)
+const PLAYER_DRAW_OFFSET_Y = -6; // mueve el sprite en Y (ajusta para centrar)
+
 class Player {
   constructor(x, y, w, h) {
     this.x = x;this.y = y;this.width = w;this.height = h;this.currentFrame = 0;this.animationCounter = 0;
@@ -386,9 +526,9 @@ class Player {
   display() {
     if (playerSpriteSheet) {
       push();
-      translate(this.x, this.y);
+      // aplicar offset visual al dibujar (no cambia la posición lógica ni colisiones)
+      translate(this.x + PLAYER_DRAW_OFFSET_X, this.y + PLAYER_DRAW_OFFSET_Y);
       // usar sideScale (animado) para efecto de giro en lugar de side directo
-      // además aplicamos un pequeño tilt según cuánto esté girando
       const flipProgress = 1 - Math.abs(sideScale); // 0 cuando normal, 1 cuando en "centro" del giro
       const tilt = flipProgress * 0.6 * Math.sign(side); // inclinación suave durante el giro
       rotate(tilt);
@@ -400,7 +540,7 @@ class Player {
       pop();
     } else {
       fill(0, 100, 100);
-      ellipse(this.x, this.y, this.width, this.height);
+      ellipse(this.x + PLAYER_DRAW_OFFSET_X, this.y + PLAYER_DRAW_OFFSET_Y, this.width, this.height);
     }
   }
 }
