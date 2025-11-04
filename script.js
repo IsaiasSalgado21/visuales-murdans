@@ -24,6 +24,7 @@ let cnvEl = null;let currentScale = 1;
 const BASE_SPEED = 3;                // velocidad base (era 3 en tu código)
 const RUN_MULTIPLIER = 2;            // multiplicador de velocidad al correr
 const DOUBLE_TAP_MS = 300;           // ventana para considerar doble-tap (ms)
+let side=1;                     // dirección actual de movimiento
 let lastKeyTime = { left:0, right:0, up:0, down:0 }; // timestamps últimos pulsos
 let runCooldownUntil = { left:0, right:0, up:0, down:0 }; // bloqueo tras activar
 let runActive = { left:false, right:false, up:false, down:false };
@@ -77,7 +78,6 @@ function setup() {
     FRAME_HEIGHT * PLAYER_SCALE_FACTOR
   );
 
-  // crear item en el centro de la pantalla
   item = new Item(width / 2, height / 2, FRAME_WIDTH * PLAYER_SCALE_FACTOR, FRAME_HEIGHT * PLAYER_SCALE_FACTOR);
 
   mandalaPos = createVector(width / 2, height / 2);
@@ -91,9 +91,7 @@ function windowResized() {
   mandalaPos.set(width / 2, height / 2);
 }
 
-// --- NUEVAS FUNCIONES DE TECLADO: detectar doble-tap y liberar sprint ---
 function _dirFromKeyEvent() {
-  // devuelve 'left'|'right'|'up'|'down' o null según la tecla actual (p5: key y keyCode)
   if (keyCode === LEFT_ARROW || key === 'a' || key === 'A') return 'left';
   if (keyCode === RIGHT_ARROW || key === 'd' || key === 'D') return 'right';
   if (keyCode === UP_ARROW || key === 'w' || key === 'W') return 'up';
@@ -106,7 +104,6 @@ function keyPressed() {
   if (!dir) return;
   const now = millis();
 
-  // si estamos en cooldown para esa dirección, solo actualizamos lastKeyTime
   if (runCooldownUntil[dir] && now < runCooldownUntil[dir]) {
     lastKeyTime[dir] = now;
     return;
@@ -159,10 +156,12 @@ class Player {
     if (leftDown) {
       const speed = BASE_SPEED * (runActive.left ? RUN_MULTIPLIER : 1);
       this.x -= speed;
+      side=-1;
     }
     if (rightDown) {
       const speed = BASE_SPEED * (runActive.right ? RUN_MULTIPLIER : 1);
       this.x += speed;
+      side=1;
     }
     if (upDown) {
       const speed = BASE_SPEED * (runActive.up ? RUN_MULTIPLIER : 1);
@@ -182,10 +181,18 @@ class Player {
 
   display() {
     if (playerSpriteSheet) {
+      push();
+      translate(this.x, this.y);
+      scale(side, 1);
       imageMode(CENTER);
-      let sx = this.currentFrame * FRAME_WIDTH;let sy = 0;
-      image(playerSpriteSheet,this.x, this.y,this.width, this.height,sx, sy,FRAME_WIDTH, FRAME_HEIGHT);
-    } else {fill(0, 100, 100);ellipse(this.x, this.y, this.width, this.height);}
+      const sx = this.currentFrame * FRAME_WIDTH;
+      const sy = 0;
+      image(playerSpriteSheet, 0, 0, this.width, this.height, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
+      pop();
+    } else {
+      fill(0, 100, 100);
+      ellipse(this.x, this.y, this.width, this.height);
+    }
   }
 }
 
