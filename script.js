@@ -28,16 +28,11 @@ let side=1;                     // dirección actual de movimiento
 let lastKeyTime = { left:0, right:0, up:0, down:0 }; // timestamps últimos pulsos
 let runCooldownUntil = { left:0, right:0, up:0, down:0 }; // bloqueo tras activar
 let runActive = { left:false, right:false, up:false, down:false };
-
-// HITBOX: array para modificar dimensiones y origen [ player, item ]
-// w,h = tamaño; ox,oy = offset (en píxeles) desde el centro del objeto
 let hitboxSizes = [
   { w: FRAME_WIDTH * PLAYER_SCALE_FACTOR * 0.5, h: FRAME_HEIGHT * PLAYER_SCALE_FACTOR * 0.57, ox: 0, oy: 0 }, // player
   { w: FRAME_WIDTH * PLAYER_SCALE_FACTOR * 0.3, h: FRAME_HEIGHT * PLAYER_SCALE_FACTOR * 0.4, ox: 0, oy: 0 }  // item
 ];
-
-let showHitboxes = false; // toggle con la tecla "1"
-
+let showHitboxes = false;
 const ITEM_SPRITE_FILE = 'spr_capa.png';
 let itemSpriteSheet;
 let item;
