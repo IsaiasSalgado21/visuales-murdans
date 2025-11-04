@@ -57,6 +57,7 @@ let blurPulseTarget = 0;
 const MAX_BLUR = 2;      // blur máximo (ajustable)
 const BLEND_SPEED = 0.06;
 const BLUR_DEFAULT_DURATION = 500; // ms -> medio segundo (pulse total)
+const ATTACHED_SCALE = 1.6; // escala de la capa cuando está puesta (ajusta aquí)
 
 function preload() {
   try {
@@ -174,7 +175,6 @@ function draw() {
   if (blurPulseDuration > 0) {
     const elapsed = millis() - blurPulseStart;
     const t = constrain(elapsed / blurPulseDuration, 0, 1);
-    // hacemos un pulse: 0 -> target (t in 0..0.5) -> 0 (t in 0.5..1)
     let val;
     if (t < 0.5) {
       const subT = constrain(t / 0.5, 0, 1);
@@ -191,34 +191,31 @@ function draw() {
       blurAmount = 0;
     }
   } else {
-    // si no hay animación en curso -> no aplicamos blur persistente
     blurAmount = 0;
   }
-  
-  // actualizar jugador primero (detectamos colisión tras actualizar posición)
+
+  // actualizar lógica del jugador antes de dibujar (posición, pickup, timers)
   player.update();
-  
-  // PICKUP: si el item está visible, no está bloqueado, no lo llevamos y colisionamos -> recoger
-  if (item && item.visible && !item.pickupLocked && !capeEquipped && checkCollision(player, item, 0, 1)) {
-    // recoger
-    item.visible = false;
+
+  // PICKUP: si el item está en suelo, visible, no bloqueado, no lo llevamos y colisionamos -> recoger
+  if (item && item.visible && !item.pickupLocked && !capeEquipped && !item.attached && checkCollision(player, item, 0, 1)) {
+    item.attached = true;
     capeEquipped = true;
     capeTimer = CAPE_DURATION;
-    // activar transición a noche (crossfade) y ejecutar pulse de blur de medio segundo
     bgBlendTarget = 1;
     setBlurPulse(MAX_BLUR, BLUR_DEFAULT_DURATION);
-    item.pickupLocked = true;  // bloquear re-pickup hasta que salgamos de su hitbox al soltar
+    item.pickupLocked = true;
   }
 
-  // Si la capa está puesta, decrementar el temporizador
+  // Temporizador de la capa
   if (capeEquipped) {
-    capeTimer -= deltaTime; // deltaTime es ms en p5
+    capeTimer -= deltaTime;
     if (capeTimer <= 0) {
-      // se termina el efecto: soltar la capa en la posición del jugador y bloquear la re-recolección hasta salir
       capeEquipped = false;
-      // iniciar transición a día (crossfade) y ejecutar pulse de blur de medio segundo
       bgBlendTarget = 0;
       setBlurPulse(MAX_BLUR, BLUR_DEFAULT_DURATION);
+
+      item.attached = false;
       item.visible = true;
       item.x = player.x;
       item.y = player.y;
@@ -227,23 +224,36 @@ function draw() {
     }
   }
 
-  // Si el item está visible y bloqueado, desbloquear cuando el jugador salga de su hitbox
-  if (item && item.visible && item.pickupLocked && !checkCollision(player, item, 0, 1)) {
+  // desbloquear pickup cuando el jugador salga de la hitbox (solo si está en suelo)
+  if (item && item.visible && item.pickupLocked && !item.attached && !checkCollision(player, item, 0, 1)) {
     item.pickupLocked = false;
   }
 
-  // dibujar fondo (ahora usa bgBlend para crossfade día/noche)
+  // --- DIBUJADO: fondo y elementos en el orden correcto ---
+  // fondo (con crossfade)
   drawBackgroundSprite();
 
-  // luego dibujar actor y item (las animaciones siguen)
-  player.display();
-  if (item) item.display();
+  // mandala debe ir detrás del jugador y de la capa puesta
+  updateMandala();
+  drawMandala();
 
-  // si está activado, dibujar las hitboxes usando hitboxSizes y mostrar texto de estado + timer
+  // si la capa está puesta -> dibujarla ANTES del jugador (queda detrás del jugador)
+  if (item && item.attached) {
+    item.displayAttached(player);
+  }
+
+  // dibujar jugador
+  player.display();
+
+  // si la capa NO está puesta en el jugador, dibujarla en su posición de suelo (por encima del jugador)
+  if (item && !item.attached) {
+    item.display();
+  }
+
+  // UI / hitboxes / texto de estado
   if (showHitboxes) {
     drawHitboxes();
 
-    // texto de estado de la capa y temporizador (si está puesta)
     push();
     fill(0, 0, 100);
     noStroke();
@@ -258,13 +268,9 @@ function draw() {
     pop();
   }
 
-  updateMandala();
-  drawMandala();
-
-  // --- APLICAR BLUR SUAVEMENTE --- 
+  // --- APLICAR BLUR SUAVEMENTE (solo overlay temporal) ---
   if (blurAmount > 0.01) {
     pg.clear();
-    // capturar canvas explícitamente para evitar artefactos
     const snap = get(0, 0, width, height);
     pg.image(snap, 0, 0, width, height);
     pg.filter(BLUR, blurAmount);
@@ -368,7 +374,10 @@ class Item {
     this.frameRate = 8;
     this.visible = true;
     this.pickupLocked = false;
+    this.attached = false; // <-- nueva bandera: está puesta en el personaje
   }
+
+  // dibujo normal (suelo)
   display() {
     if (!this.visible) return;
     if (!itemSpriteSheet) {
@@ -386,6 +395,47 @@ class Item {
     const sy = 0;
     imageMode(CENTER);
     image(itemSpriteSheet, this.x, this.y, this.w, this.h, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
+  }
+
+  // dibujo cuando está puesta en el jugador (se dibuja detrás del jugador)
+  displayAttached(playerObj) {
+    if (!itemSpriteSheet) return;
+
+    // calcular frame
+    const totalFrames = max(1, floor(itemSpriteSheet.width / FRAME_WIDTH));
+    const t = millis() / (1000 / this.frameRate);
+    const frameIndex = floor(t) % totalFrames;
+    const sx = frameIndex * FRAME_WIDTH;
+    const sy = 0;
+
+    push();
+    // offsets configurables
+    const offsetY = -10;                 // altura relativa al centro del jugador
+    const offsetDistX = 26 * ATTACHED_SCALE; // distancia horizontal desde el centro del jugador
+
+    // queremos que la capa se dibuje hacia el lado contrario de `side`
+    // si side == 1 (jugador mira a la derecha) -> la capa se dibuja a la izquierda: dir = -side
+    const dir = -side; // -1 o 1
+
+    // colocamos el origen en la posición objetivo (centro del jugador + offset lateral/opuesto)
+    translate(playerObj.x + dir * offsetDistX, playerObj.y + offsetY);
+
+    // aplicar escala para tamaño e inversión horizontal según sea necesario
+    // scaleX = dir * ATTACHED_SCALE (si dir = -1 -> voltea horizontalmente)
+    scale(dir * ATTACHED_SCALE, ATTACHED_SCALE);
+
+    // rotación ligera para que "cuelgue" coherente con la dirección
+    // rotar en sentido que haga que la capa apunte hacia dir
+    rotate(-0.4 * dir); // ajusta 0.4 (radianes) si quieres otra inclinación
+
+    imageMode(CENTER);
+    noTint();
+
+    // dibujar el frame (usamos FRAME_WIDTH/HEIGHT como fuente)
+    const displayW = FRAME_WIDTH;  // ya escalamos con scale(), así dejamos el width igual a frame
+    const displayH = FRAME_HEIGHT;
+    image(itemSpriteSheet, 0, 0, displayW, displayH, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
+    pop();
   }
 }
 
@@ -435,12 +485,19 @@ function drawHitboxes() {
 
   // item hitbox: verde si está bloqueada, azul si no
   const hi = hitboxSizes[1];
+  let ix = item.x;
+  let iy = item.y;
+  if (item && item.attached) {
+    // cuando está puesta, la hitbox sigue la posición del jugador
+    ix = player.x + (hi.ox || 0);
+    iy = player.y + (hi.oy || 0);
+  }
   if (item && item.pickupLocked) {
     stroke(120, 100, 80); // verde
   } else {
     stroke(200, 100, 100); // azul
   }
-  rect(item.x + (hi.ox || 0), item.y + (hi.oy || 0), hi.w, hi.h);
+  rect(ix, iy, hi.w, hi.h);
 
   pop();
 }
