@@ -45,6 +45,19 @@ const BG_NIGHT_SPRITE_SHEET_FILE = 'fondo_noche.png';
 let bgNightSpriteSheet;
 let isNight = false;
 
+// --- NUEVAS VARIABLES PARA TRANSICIÓN / BLUR ---
+let pg;
+let bgBlend = 0;         // 0 = día, 1 = noche (valor actual)
+let bgBlendTarget = 0;   // target a interpolar
+let blurAmount = 0;      // valor actual de blur (p5 filter)
+// pulsado de blur (pulse: sube y baja)
+let blurPulseStart = 0;
+let blurPulseDuration = 0;
+let blurPulseTarget = 0;
+const MAX_BLUR = 2;      // blur máximo (ajustable)
+const BLEND_SPEED = 0.06;
+const BLUR_DEFAULT_DURATION = 500; // ms -> medio segundo (pulse total)
+
 function preload() {
   try {
     playerSpriteSheet = loadImage(SPRITE_SHEET_FILE);
@@ -88,6 +101,12 @@ function setup() {
   cnvEl.style.width = `${GAME_WIDTH}px`;
   cnvEl.style.height = `${GAME_HEIGHT}px`;
   scaleCanvasToWindow(); // centra y escala inicialmente
+
+  // buffer para copiar la pantalla y aplicar filtro blur
+  pg = createGraphics(GAME_WIDTH, GAME_HEIGHT);
+  pg.pixelDensity(1);
+  pg.noSmooth();
+
   player = new Player(
     width / 2 - 250, // mueve 50px a la izquierda
     height / 2,
@@ -148,16 +167,46 @@ function keyReleased() {
 }
 
 function draw() {
+  // suavizar/transicionar valores de blend (bg) y blur (ahora time-based)
+  bgBlend = lerp(bgBlend, bgBlendTarget, BLEND_SPEED);
+
+  // Interpolación temporal para blur (pulse: sube y baja durante blurPulseDuration)
+  if (blurPulseDuration > 0) {
+    const elapsed = millis() - blurPulseStart;
+    const t = constrain(elapsed / blurPulseDuration, 0, 1);
+    // hacemos un pulse: 0 -> target (t in 0..0.5) -> 0 (t in 0.5..1)
+    let val;
+    if (t < 0.5) {
+      const subT = constrain(t / 0.5, 0, 1);
+      const eased = subT * subT * (3 - 2 * subT);
+      val = lerp(0, blurPulseTarget, eased);
+    } else {
+      const subT = constrain((t - 0.5) / 0.5, 0, 1);
+      const eased = subT * subT * (3 - 2 * subT);
+      val = lerp(blurPulseTarget, 0, eased);
+    }
+    blurAmount = val;
+    if (t >= 1) {
+      blurPulseDuration = 0;
+      blurAmount = 0;
+    }
+  } else {
+    // si no hay animación en curso -> no aplicamos blur persistente
+    blurAmount = 0;
+  }
+  
   // actualizar jugador primero (detectamos colisión tras actualizar posición)
   player.update();
-
+  
   // PICKUP: si el item está visible, no está bloqueado, no lo llevamos y colisionamos -> recoger
   if (item && item.visible && !item.pickupLocked && !capeEquipped && checkCollision(player, item, 0, 1)) {
     // recoger
     item.visible = false;
     capeEquipped = true;
     capeTimer = CAPE_DURATION;
-    isNight = true;            // activar fondo noche
+    // activar transición a noche (crossfade) y ejecutar pulse de blur de medio segundo
+    bgBlendTarget = 1;
+    setBlurPulse(MAX_BLUR, BLUR_DEFAULT_DURATION);
     item.pickupLocked = true;  // bloquear re-pickup hasta que salgamos de su hitbox al soltar
   }
 
@@ -167,7 +216,9 @@ function draw() {
     if (capeTimer <= 0) {
       // se termina el efecto: soltar la capa en la posición del jugador y bloquear la re-recolección hasta salir
       capeEquipped = false;
-      isNight = false;
+      // iniciar transición a día (crossfade) y ejecutar pulse de blur de medio segundo
+      bgBlendTarget = 0;
+      setBlurPulse(MAX_BLUR, BLUR_DEFAULT_DURATION);
       item.visible = true;
       item.x = player.x;
       item.y = player.y;
@@ -181,7 +232,7 @@ function draw() {
     item.pickupLocked = false;
   }
 
-  // dibujar fondo correspondiente
+  // dibujar fondo (ahora usa bgBlend para crossfade día/noche)
   drawBackgroundSprite();
 
   // luego dibujar actor y item (las animaciones siguen)
@@ -194,7 +245,6 @@ function draw() {
 
     // texto de estado de la capa y temporizador (si está puesta)
     push();
-    // usar HSB: texto blanco
     fill(0, 0, 100);
     noStroke();
     textSize(16);
@@ -210,20 +260,48 @@ function draw() {
 
   updateMandala();
   drawMandala();
+
+  // --- APLICAR BLUR SUAVEMENTE --- 
+  if (blurAmount > 0.01) {
+    pg.clear();
+    // capturar canvas explícitamente para evitar artefactos
+    const snap = get(0, 0, width, height);
+    pg.image(snap, 0, 0, width, height);
+    pg.filter(BLUR, blurAmount);
+    const blurAlpha = constrain(map(blurAmount, 0, MAX_BLUR, 0, 1), 0, 1);
+    push();
+    tint(255, 255 * blurAlpha);
+    image(pg, 0, 0, width, height);
+    noTint();
+    pop();
+  }
 }
 
-// modificar drawBackgroundSprite para elegir fondo según isNight
+// modificar drawBackgroundSprite para elegir fondo según bgBlend (crossfade)
 function drawBackgroundSprite() {
-  const sprite = (isNight && bgNightSpriteSheet) ? bgNightSpriteSheet : bgSpriteSheet;
-  if (!sprite) {
+  if (!bgSpriteSheet) {
     background(0);
     return;
   }
   let frameIndex = floor(bgCurrentFrame);
   let sx = frameIndex * BG_FRAME_WIDTH;
   let sy = 0;
+
+  // dibujar fondo diurno base
   imageMode(CORNER);
-  image(sprite, 0, 0, width, height, sx, sy, BG_FRAME_WIDTH, BG_FRAME_HEIGHT);
+  image(bgSpriteSheet, 0, 0, width, height, sx, sy, BG_FRAME_WIDTH, BG_FRAME_HEIGHT);
+
+  // si existe fondo nocturno, dibujarlo encima con alpha bgBlend
+  if (bgNightSpriteSheet && bgBlend > 0.001) {
+    push();
+    // aplicar tint para controlar alfa
+    tint(255, bgBlend * 255);
+    image(bgNightSpriteSheet, 0, 0, width, height, sx, sy, BG_FRAME_WIDTH, BG_FRAME_HEIGHT);
+    noTint();
+    pop();
+  }
+
+  // avanzar frame de animación
   bgCurrentFrame = (bgCurrentFrame + BG_FRAME_RATE) % BG_NUM_FRAMES;
 }
 
@@ -388,4 +466,10 @@ function checkCollision(p, it, pIndex = 0, iIndex = 1) {
   const overlapX = dx < (bw + iw) / 2;
   const overlapY = dy < (bh + ih) / 2;
   return overlapX && overlapY;
+}
+
+function setBlurPulse(target, duration = BLUR_DEFAULT_DURATION) {
+  blurPulseStart = millis();
+  blurPulseDuration = Math.max(0, duration);
+  blurPulseTarget = target;
 }
