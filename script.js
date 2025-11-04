@@ -58,7 +58,7 @@ let blurAmount = 0;      // valor actual de blur (p5 filter)
 let blurPulseStart = 0;
 let blurPulseDuration = 0;
 let blurPulseTarget = 0;
-const MAX_BLUR = 2;      // blur máximo (ajustable)
+const MAX_BLUR = 3;      // blur máximo (ajustable)
 const BLEND_SPEED = 0.06;
 const BLUR_DEFAULT_DURATION = 500; // ms -> medio segundo (pulse total)
 const ATTACHED_SCALE = 1.6; // escala de la capa cuando está puesta (ajusta aquí)
@@ -75,6 +75,146 @@ let targetZoom = 1;             // (ya no usado para zoom dramatic)
 const PARALLAX_ZOOM_FACTOR = 0.02;
 const CAM_LERP = 0.08;
 const ZOOM_LERP = 0.06;
+
+// --- EDGE FADE / COLORED EDGES (animado, explosivo, con blur en buffer) ---
+const EDGE_SOLID_BAND = 36;       // banda sólida mínima en px
+const EDGE_FADE_SIZE = 120;      // ancho del fade interior (px) — mayor para efecto expansivo
+const EDGE_FADE_STEPS = 36;      // pasos para aproximar el gradiente
+const EDGE_MAX_ALPHA = 230;      // alpha máximo (0..255)
+const EDGE_BLUR_AMOUNT = 10;     // cantidad de blur aplicado al buffer
+
+// control de color / animación
+const EDGE_HUE_SPEED = 0.02;     // velocidad de cambio de hue
+const EDGE_HUE_SPREAD = 80;      // separación de matices entre pasos
+const EDGE_MOVEMENT_FREQ = 0.0015; // frecuencia de movimiento para ondas
+
+let edgeBuffer = null; // buffer para dibujar overlay de orillas con blur
+
+function drawEdgeFade() {
+  if (!edgeBuffer) return;
+
+  // distancia del jugador a cada orilla (en px)
+  const halfW = player.width / 2;
+  const halfH = player.height / 2;
+  const leftDist = player.x - halfW;
+  const rightDist = (width - (player.x + halfW));
+  const topDist = player.y - halfH;
+  const bottomDist = (height - (player.y + halfH));
+
+  // si no estamos cerca de ninguna orilla, limpiar buffer y salir
+  if (leftDist > EDGE_SOLID_BAND + EDGE_FADE_SIZE &&
+      rightDist > EDGE_SOLID_BAND + EDGE_FADE_SIZE &&
+      topDist > EDGE_SOLID_BAND + EDGE_FADE_SIZE &&
+      bottomDist > EDGE_SOLID_BAND + EDGE_FADE_SIZE) {
+    edgeBuffer.clear();
+    return;
+  }
+
+  // preparar buffer
+  edgeBuffer.clear();
+  edgeBuffer.push();
+  edgeBuffer.resetMatrix();
+  edgeBuffer.rectMode(CORNER);
+  edgeBuffer.noStroke();
+  edgeBuffer.blendMode(ADD); // colores explosivos suman luz
+  edgeBuffer.colorMode(HSB, 360, 100, 100, 255);
+
+  const stepsW = max(1, EDGE_FADE_STEPS);
+  const stepsH = max(1, EDGE_FADE_STEPS);
+  const stepW = EDGE_FADE_SIZE / stepsW;
+  const stepH = EDGE_FADE_SIZE / stepsH;
+
+  const time = millis();
+  const baseHue = (time * EDGE_HUE_SPEED) % 360;
+
+  // helper prox factor 0..1
+  const proxFactor = (dist) => constrain((EDGE_SOLID_BAND + EDGE_FADE_SIZE - dist) / (EDGE_SOLID_BAND + EDGE_FADE_SIZE), 0, 1);
+
+  // dibuja una franja vertical u horizontal con colores animados
+  const drawVerticalGradient = (xStart, widthBand, dist, sideIndex) => {
+    const pf = proxFactor(dist);
+    if (pf <= 0.001) return;
+
+    // banda sólida (pequeña)
+    if (dist < EDGE_SOLID_BAND) {
+      const solidAlpha = EDGE_MAX_ALPHA * constrain((EDGE_SOLID_BAND - dist) / EDGE_SOLID_BAND, 0, 1);
+      edgeBuffer.fill((baseHue + sideIndex * EDGE_HUE_SPREAD) % 360, 100, 80, solidAlpha);
+      edgeBuffer.rect(xStart, 0, widthBand, height);
+    }
+
+    // gradiente animado
+    for (let i = 0; i < stepsW; i++) {
+      const x = xStart + widthBand + i * stepW;
+      const w = stepW;
+      const t = 1 - (i + 0.5) / stepsW; // 1..0
+      // movimiento ondulatorio para alpha y hue offset
+      const wave = 0.5 + 0.5 * Math.sin(time * EDGE_MOVEMENT_FREQ * 1000 + i * 0.4 + sideIndex * 1.2);
+      const alpha = EDGE_MAX_ALPHA * t * pf * wave * 0.95;
+      if (alpha > 1) {
+        const hue = (baseHue + sideIndex * EDGE_HUE_SPREAD + i * 6 + wave * 30) % 360;
+        edgeBuffer.fill(hue, 100, 100, alpha);
+        edgeBuffer.rect(x, 0, w, height);
+      }
+      // sutil glow line adicional para romper monotonía
+      if (i % 6 === 0) {
+        const hue2 = (baseHue + sideIndex * EDGE_HUE_SPREAD * 0.5 + (i * 12)) % 360;
+        edgeBuffer.fill(hue2, 90, 70, alpha * 0.35);
+        edgeBuffer.rect(x, height * 0.15, w, height * 0.7);
+      }
+    }
+  };
+
+  const drawHorizontalGradient = (yStart, heightBand, dist, sideIndex) => {
+    const pf = proxFactor(dist);
+    if (pf <= 0.001) return;
+
+    if (dist < EDGE_SOLID_BAND) {
+      const solidAlpha = EDGE_MAX_ALPHA * constrain((EDGE_SOLID_BAND - dist) / EDGE_SOLID_BAND, 0, 1);
+      edgeBuffer.fill((baseHue + sideIndex * EDGE_HUE_SPREAD) % 360, 100, 80, solidAlpha);
+      edgeBuffer.rect(0, yStart, width, heightBand);
+    }
+
+    for (let i = 0; i < stepsH; i++) {
+      const y = yStart + heightBand + i * stepH;
+      const h = stepH;
+      const t = 1 - (i + 0.5) / stepsH;
+      const wave = 0.5 + 0.5 * Math.sin(time * EDGE_MOVEMENT_FREQ * 1000 + i * 0.35 + sideIndex * -1.4);
+      const alpha = EDGE_MAX_ALPHA * t * pf * wave * 0.95;
+      if (alpha > 1) {
+        const hue = (baseHue + sideIndex * EDGE_HUE_SPREAD + i * 6 + wave * -30) % 360;
+        edgeBuffer.fill(hue, 100, 100, alpha);
+        edgeBuffer.rect(0, y, width, h);
+      }
+      if (i % 8 === 0) {
+        const hue2 = (baseHue + sideIndex * EDGE_HUE_SPREAD * 0.6 + i * 9) % 360;
+        edgeBuffer.fill(hue2, 90, 70, alpha * 0.28);
+        edgeBuffer.rect(width * 0.15, y, width * 0.7, h);
+      }
+    }
+  };
+
+  // Ejecutar por cada orilla con sideIndex para variar matices
+  drawVerticalGradient(0, EDGE_SOLID_BAND, leftDist, 0);                         // izquierda
+  drawVerticalGradient(width - EDGE_SOLID_BAND - EDGE_FADE_SIZE, EDGE_SOLID_BAND, rightDist, 1); // derecha
+  drawHorizontalGradient(0, EDGE_SOLID_BAND, topDist, 2);                       // arriba
+  drawHorizontalGradient(height - EDGE_SOLID_BAND - EDGE_FADE_SIZE, EDGE_SOLID_BAND, bottomDist, 3); // abajo
+
+  edgeBuffer.pop();
+
+  // aplicar blur al buffer y dibujar sobre el canvas (en pantalla, sin transformaciones)
+  edgeBuffer.filter(BLUR, EDGE_BLUR_AMOUNT);
+
+  push();
+  resetMatrix();
+  blendMode(ADD);
+  imageMode(CORNER);
+  image(edgeBuffer, 0, 0, width, height);
+  blendMode(BLEND);
+  pop();
+
+  // restaurar modo de color del resto del juego
+  colorMode(HSB, 360, 100, 100);
+}
 
 // --- Toggle de parallax ---
 let parallaxEnabled = true; // true = cámara/parallax activo, false = visión "normal" (sin parallax)
@@ -206,6 +346,12 @@ function setup() {
   pg = createGraphics(GAME_WIDTH, GAME_HEIGHT);
   pg.pixelDensity(1);
   pg.noSmooth();
+
+  // buffer para el overlay de orillas (dibujamos en él y aplicamos BLUR)
+  edgeBuffer = createGraphics(GAME_WIDTH, GAME_HEIGHT);
+  edgeBuffer.pixelDensity(1);
+  edgeBuffer.noSmooth();
+  edgeBuffer.clear();
 
   player = new Player(
     width / 2 - 250, // mueve 50px a la izquierda
@@ -414,6 +560,8 @@ function draw() {
     if (item && !item.attached) item.display();
     endLayer();
 
+    // dibujar el fade de orillas (asegura que se vea encima de la escena)
+    drawEdgeFade();
   } else {
     // --- VISIÓN NORMAL sin parallax/zoom: dibujar objetos en coordenadas directas ---
     updateMandala();
