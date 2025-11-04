@@ -36,6 +36,9 @@ let showHitboxes = false;
 const ITEM_SPRITE_FILE = 'spr_capa.png';
 let itemSpriteSheet;
 let item;
+let capeEquipped = false;
+let capeTimer = 0;
+const CAPE_DURATION = 5000; // ms
 
 // nuevo: archivo de fondo nocturno y flag
 const BG_NIGHT_SPRITE_SHEET_FILE = 'fondo_noche.png';
@@ -148,9 +151,34 @@ function draw() {
   // actualizar jugador primero (detectamos colisión tras actualizar posición)
   player.update();
 
-  // nuevo: detectar colisión y activar fondo nocturno sin detener animaciones
-  if (item && checkCollision(player, item, 0, 1)) {
-    isNight = true;
+  // PICKUP: si el item está visible, no está bloqueado, no lo llevamos y colisionamos -> recoger
+  if (item && item.visible && !item.pickupLocked && !capeEquipped && checkCollision(player, item, 0, 1)) {
+    // recoger
+    item.visible = false;
+    capeEquipped = true;
+    capeTimer = CAPE_DURATION;
+    isNight = true;            // activar fondo noche
+    item.pickupLocked = true;  // bloquear re-pickup hasta que salgamos de su hitbox al soltar
+  }
+
+  // Si la capa está puesta, decrementar el temporizador
+  if (capeEquipped) {
+    capeTimer -= deltaTime; // deltaTime es ms en p5
+    if (capeTimer <= 0) {
+      // se termina el efecto: soltar la capa en la posición del jugador y bloquear la re-recolección hasta salir
+      capeEquipped = false;
+      isNight = false;
+      item.visible = true;
+      item.x = player.x;
+      item.y = player.y;
+      item.pickupLocked = true;
+      capeTimer = 0;
+    }
+  }
+
+  // Si el item está visible y bloqueado, desbloquear cuando el jugador salga de su hitbox
+  if (item && item.visible && item.pickupLocked && !checkCollision(player, item, 0, 1)) {
+    item.pickupLocked = false;
   }
 
   // dibujar fondo correspondiente
@@ -160,9 +188,24 @@ function draw() {
   player.display();
   if (item) item.display();
 
-  // si está activado, dibujar las hitboxes usando hitboxSizes
+  // si está activado, dibujar las hitboxes usando hitboxSizes y mostrar texto de estado + timer
   if (showHitboxes) {
     drawHitboxes();
+
+    // texto de estado de la capa y temporizador (si está puesta)
+    push();
+    // usar HSB: texto blanco
+    fill(0, 0, 100);
+    noStroke();
+    textSize(16);
+    textAlign(LEFT, TOP);
+    const estado = capeEquipped ? 'puesta' : 'no puesta';
+    let texto = `Capa: ${estado}`;
+    if (capeEquipped) {
+      texto += `  (${(capeTimer/1000).toFixed(1)} s)`;
+    }
+    text(texto, 10, 10);
+    pop();
   }
 
   updateMandala();
@@ -239,13 +282,32 @@ class Player {
 }
 
 class Item {
-  constructor(x, y, w, h) {this.x = x;this.y = y;this.w = w;this.h = h;this.frameRate = 8; }
+  constructor(x, y, w, h) {
+    this.x = x;
+    this.y = y;
+    this.w = w;
+    this.h = h;
+    this.frameRate = 8;
+    this.visible = true;
+    this.pickupLocked = false;
+  }
   display() {
-    if (!itemSpriteSheet) {push();fill(0, 0, 100);rectMode(CENTER);rect(this.x, this.y, this.w, this.h);pop();return;}
+    if (!this.visible) return;
+    if (!itemSpriteSheet) {
+      push();
+      fill(0, 0, 100);
+      rectMode(CENTER);
+      rect(this.x, this.y, this.w, this.h);
+      pop();
+      return;
+    }
     const totalFrames = max(1, floor(itemSpriteSheet.width / FRAME_WIDTH));
-    const t = millis() / (1000 / this.frameRate);const frameIndex = floor(t) % totalFrames;
-    const sx = frameIndex * FRAME_WIDTH;const sy = 0;
-    imageMode(CENTER);image(itemSpriteSheet, this.x, this.y, this.w, this.h, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
+    const t = millis() / (1000 / this.frameRate);
+    const frameIndex = floor(t) % totalFrames;
+    const sx = frameIndex * FRAME_WIDTH;
+    const sy = 0;
+    imageMode(CENTER);
+    image(itemSpriteSheet, this.x, this.y, this.w, this.h, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
   }
 }
 
@@ -293,9 +355,13 @@ function drawHitboxes() {
   const hp = hitboxSizes[0];
   rect(player.x + (hp.ox || 0), player.y + (hp.oy || 0), hp.w, hp.h);
 
-  // item hitbox (azul)
-  stroke(200, 100, 100);
+  // item hitbox: verde si está bloqueada, azul si no
   const hi = hitboxSizes[1];
+  if (item && item.pickupLocked) {
+    stroke(120, 100, 80); // verde
+  } else {
+    stroke(200, 100, 100); // azul
+  }
   rect(item.x + (hi.ox || 0), item.y + (hi.oy || 0), hi.w, hi.h);
 
   pop();
