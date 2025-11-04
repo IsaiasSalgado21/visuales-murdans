@@ -33,12 +33,22 @@ const ITEM_SPRITE_FILE = 'spr_capa.png';
 let itemSpriteSheet;
 let item;
 
+// nuevo: archivo de fondo nocturno y flag
+const BG_NIGHT_SPRITE_SHEET_FILE = 'fondo_noche.png';
+let bgNightSpriteSheet;
+let isNight = false;
+
 function preload() {
   try {
-    playerSpriteSheet = loadImage(SPRITE_SHEET_FILE);bgSpriteSheet = loadImage(BG_SPRITE_SHEET_FILE);
+    playerSpriteSheet = loadImage(SPRITE_SHEET_FILE);
+    bgSpriteSheet = loadImage(BG_SPRITE_SHEET_FILE);
     itemSpriteSheet = loadImage(ITEM_SPRITE_FILE);
+    // nuevo: cargar fondo nocturno en preload para cambiar instantáneamente
+    bgNightSpriteSheet = loadImage(BG_NIGHT_SPRITE_SHEET_FILE);
   } catch (e) {
-    console.error("No se pudo cargar el archivo: " + SPRITE_SHEET_FILE);console.error("Asegúrate de que el archivo esté subido al editor p5.js.");}
+    console.error("No se pudo cargar el archivo: " + SPRITE_SHEET_FILE);
+    console.error("Asegúrate de que el archivo esté subido al editor p5.js.");
+  }
 }
 
 function scaleCanvasToWindow() {
@@ -72,7 +82,7 @@ function setup() {
   cnvEl.style.height = `${GAME_HEIGHT}px`;
   scaleCanvasToWindow(); // centra y escala inicialmente
   player = new Player(
-    width / 2,
+    width / 2 - 250, // mueve 50px a la izquierda
     height / 2,
     FRAME_WIDTH * PLAYER_SCALE_FACTOR,
     FRAME_HEIGHT * PLAYER_SCALE_FACTOR
@@ -80,7 +90,7 @@ function setup() {
 
   item = new Item(width / 2, height / 2, FRAME_WIDTH * PLAYER_SCALE_FACTOR, FRAME_HEIGHT * PLAYER_SCALE_FACTOR);
 
-  mandalaPos = createVector(width / 2, height / 2);
+  mandalaPos = createVector(player.x, player.y);
   mandalaTimer = millis();
 }
 
@@ -125,20 +135,36 @@ function keyReleased() {
 }
 
 function draw() {
+  // actualizar jugador primero (detectamos colisión tras actualizar posición)
+  player.update();
+
+  // nuevo: detectar colisión y activar fondo nocturno sin detener animaciones
+  if (item && checkCollision(player, item)) {
+    isNight = true;
+  }
+
+  // dibujar fondo correspondiente
   drawBackgroundSprite();
-  player.update();player.display();
+
+  // luego dibujar actor y item (las animaciones siguen)
+  player.display();
   if (item) item.display();
-  updateMandala();drawMandala();
+  updateMandala();
+  drawMandala();
 }
 
+// modificar drawBackgroundSprite para elegir fondo según isNight
 function drawBackgroundSprite() {
-  if (!bgSpriteSheet) {
+  const sprite = (isNight && bgNightSpriteSheet) ? bgNightSpriteSheet : bgSpriteSheet;
+  if (!sprite) {
     background(0);
-    return;}
+    return;
+  }
   let frameIndex = floor(bgCurrentFrame);
-  let sx = frameIndex * BG_FRAME_WIDTH;let sy = 0;
+  let sx = frameIndex * BG_FRAME_WIDTH;
+  let sy = 0;
   imageMode(CORNER);
-  image(bgSpriteSheet,0, 0,width, height,sx, sy,BG_FRAME_WIDTH, BG_FRAME_HEIGHT);
+  image(sprite, 0, 0, width, height, sx, sy, BG_FRAME_WIDTH, BG_FRAME_HEIGHT);
   bgCurrentFrame = (bgCurrentFrame + BG_FRAME_RATE) % BG_NUM_FRAMES;
 }
 
@@ -239,22 +265,11 @@ function drawMandala() {
   pop();
 }
 
-function drawWaves() {
-  waveOffset += 0.05;noStroke();
-  fill(baseHue + 20, 80, 90);rect(0, 0, width, height * 0.2);
-
-  for (let y = height * 0.1; y < height; y += 10) {
-    let currentHue = (baseHue + map(y, 0, height, -20, 20) + (sin(waveOffset * 5 + y * 0.01) * 5)) % 360;
-    if (currentHue < 0) currentHue += 360;
-    let currentSaturation = map(sin(waveOffset * 3 + y * 0.005), -1, 1, 70, 100);
-    let currentBrightness = map(cos(waveOffset * 2 + y * 0.008), -1, 1, 60, 90);
-    fill(currentHue, currentSaturation, currentBrightness);
-    beginShape();vertex(0, y);
-
-    for (let x = 0; x <= width; x += 10) {
-      let waveY = y + sin(x * waveFrequency + waveOffset) * waveAmplitude;
-      vertex(x, waveY);}
-
-    vertex(width, y);vertex(width, height);vertex(0, height);endShape(CLOSE);
-  }
+// nueva función de colisión por bounding boxes centradas
+function checkCollision(p, it) {
+  const dx = Math.abs(p.x - it.x);
+  const dy = Math.abs(p.y - it.y);
+  const overlapX = dx < (p.width + it.w) / 2;
+  const overlapY = dy < (p.height + it.h) / 2;
+  return overlapX && overlapY;
 }
