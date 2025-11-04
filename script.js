@@ -24,7 +24,9 @@ let cnvEl = null;let currentScale = 1;
 const BASE_SPEED = 3;                // velocidad base (era 3 en tu código)
 const RUN_MULTIPLIER = 2;            // multiplicador de velocidad al correr
 const DOUBLE_TAP_MS = 300;           // ventana para considerar doble-tap (ms)
-let side=1;                     // dirección actual de movimiento
+let side=1;                     // dirección actual de movimiento (discreta, usada para lógica)
+let sideScale = 1;              // valor animado para el flip visual (1 .. -1)
+const SIDE_STEP = 0.1;          // decremento/incremento por frame para el efecto "papel"
 let lastKeyTime = { left:0, right:0, up:0, down:0 }; // timestamps últimos pulsos
 let runCooldownUntil = { left:0, right:0, up:0, down:0 }; // bloqueo tras activar
 let runActive = { left:false, right:false, up:false, down:false };
@@ -178,6 +180,14 @@ function keyReleased() {
 function draw() {
   // suavizar/transicionar valores de blend (bg) y blur (ahora time-based)
   bgBlend = lerp(bgBlend, bgBlendTarget, BLEND_SPEED);
+
+  // actualizar sideScale hacia side (efecto paso a paso: 0.1 por frame)
+  const diff = side - sideScale;
+  if (Math.abs(diff) <= SIDE_STEP) {
+    sideScale = side;
+  } else {
+    sideScale += SIDE_STEP * Math.sign(diff);
+  }
 
   // Interpolación temporal para blur (pulse: sube y baja durante blurPulseDuration)
   if (blurPulseDuration > 0) {
@@ -377,7 +387,12 @@ class Player {
     if (playerSpriteSheet) {
       push();
       translate(this.x, this.y);
-      scale(side, 1);
+      // usar sideScale (animado) para efecto de giro en lugar de side directo
+      // además aplicamos un pequeño tilt según cuánto esté girando
+      const flipProgress = 1 - Math.abs(sideScale); // 0 cuando normal, 1 cuando en "centro" del giro
+      const tilt = flipProgress * 0.6 * Math.sign(side); // inclinación suave durante el giro
+      rotate(tilt);
+      scale(sideScale, 1);
       imageMode(CENTER);
       const sx = this.currentFrame * FRAME_WIDTH;
       const sy = 0;
@@ -435,17 +450,16 @@ class Item {
     // usar la propia posición item.x/item.y (actualizada por el follow)
     translate(this.x, this.y);
 
-    // la capa apunta al lado opuesto: usamos dir para calcular rotación coherente
+    // la capa apunta al lado opuesto: usamos el discrete 'side' para la dirección lógica
     const dir = -side;
     rotate(-0.4 * dir);
 
-    // Voltear horizontalmente según side (side = 1 normal, -1 espejo)
-    scale(side, 1);
+    // Voltear horizontalmente según sideScale (animado) y mantener tamaño this.w/this.h
+    scale(sideScale, 1);
 
     imageMode(CENTER);
     noTint();
 
-    // Usar exactly the same drawn size as cuando está en el suelo
     image(itemSpriteSheet, 0, 0, this.w, this.h, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
     pop();
   }
