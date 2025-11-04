@@ -1,8 +1,11 @@
-const SPRITE_SHEET_FILE = 'murdans.png';
+const SPRITE_SHEET_FILE = 'murdans.png'; // <- si el PNG está en otra carpeta, cambia la ruta aquí
 const FRAME_WIDTH = 124;
 const FRAME_HEIGHT = 124;
 
 const BG_SPRITE_SHEET_FILE = 'fondo.png';
+const BG_NIGHT_SPRITE_SHEET_FILE = 'fondo_noche.png'; // <-- fichero de fondo nocturno
+const TABLA_SPRITE_FILE = 'tabla.png';                // <-- fichero de la tabla
+const ITEM_SPRITE_FILE = 'spr_capa.png';              // <-- fichero spritesheet de la capa (spr_capa.png)
 const BG_FRAME_WIDTH = 1024;
 const BG_FRAME_HEIGHT = 512;
 const BG_NUM_FRAMES = 3;
@@ -21,128 +24,21 @@ const GAME_WIDTH = 1024;
 const GAME_HEIGHT = 576;
 const MANDALA_MAX_RADIUS = 1050;
 const MANDALA_STROKE_WEIGHT = 15;
-let bgSpriteSheet;let bgCurrentFrame = 0.0;
-let player;let playerSpriteSheet;
+let bgSpriteSheet;
+let bgNightSpriteSheet = null;
+let bgCurrentFrame = 0.0;
+let player;
+let playerSpriteSheet;
+let itemSpriteSheet = null;    // <- añadida: evita ReferenceError en item.js
+let tablaSpriteSheet = null; // <- añadida: evita ReferenceError cuando no se define TABLA_SPRITE_FILE
 let numPlayerFrames = 4;let playerFrameRate = 8;
 let mandalaTimer = 0;const MANDALA_INTERVAL = 3000;
 const MANDALA_DURATION = 1000;let mandalaFade = 0.0;
 let mandalaHue = 0;let mandalaPos;
-let cnvEl = null;let currentScale = 1;
-
-const BASE_SPEED = 3;                // velocidad base (era 3 en tu código)
-const RUN_MULTIPLIER = 2;            // multiplicador de velocidad al correr
-const DOUBLE_TAP_MS = 300;           // ventana para considerar doble-tap (ms)
-let side=1;                     // dirección actual de movimiento (discreta, usada para lógica)
-let sideScale = 1;              // valor animado para el flip visual (1 .. -1)
-const SIDE_STEP = 0.1;          // decremento/incremento por frame para el efecto "papel"
-let lastKeyTime = { left:0, right:0, up:0, down:0 }; // timestamps últimos pulsos
-let runCooldownUntil = { left:0, right:0, up:0, down:0 }; // bloqueo tras activar
-let runActive = { left:false, right:false, up:false, down:false };
-let hitboxSizes = [
-  { w: FRAME_WIDTH * PLAYER_SCALE_FACTOR * 0.5, h: FRAME_HEIGHT * PLAYER_SCALE_FACTOR * 0.57, ox: 0, oy: 0 }, // player
-  { w: FRAME_WIDTH * PLAYER_SCALE_FACTOR * 0.3, h: FRAME_HEIGHT * PLAYER_SCALE_FACTOR * 0.4, ox: 0, oy: 0 }  // item
-];
-
-// Mostrar/ocultar hitboxes (se alterna con la tecla '1')
-let showHitboxes = false;
-
-// helper: obtener caja (centro + w/h) a usar para colisión/dibujo
-function _getHitboxFor(obj, fallbackIndex = null) {
-  // si hay entries en hitboxSizes y el objeto parece Player/Item, usar índice por tipo
-  let def = null;
-  if (obj instanceof Player) def = hitboxSizes[0];
-  else if (obj instanceof Item) def = hitboxSizes[1];
-  else if (typeof fallbackIndex === 'number' && hitboxSizes[fallbackIndex]) def = hitboxSizes[fallbackIndex];
-
-  if (def) {
-    const ox = def.ox || 0;
-    const oy = def.oy || 0;
-    // caja centrada en obj.x+ox, obj.y+oy
-    return {
-      cx: (obj.x ?? 0) + ox,
-      cy: (obj.y ?? 0) + oy,
-      w: def.w ?? (obj.width ?? obj.w ?? 0),
-      h: def.h ?? (obj.height ?? obj.h ?? 0)
-    };
-  }
-
-  // fallback: usar dimensiones del propio objeto centradas en x,y
-  return {
-    cx: (obj.x ?? 0),
-    cy: (obj.y ?? 0),
-    w: (obj.width ?? obj.w ?? 0),
-    h: (obj.height ?? obj.h ?? 0)
-  };
-}
-
-// AABB collision helper que usa hitboxSizes por defecto para Player/Item
-function checkCollision(objA, objB, padding = 0, scale = 1) {
-  const a = _getHitboxFor(objA);
-  const b = _getHitboxFor(objB);
-
-  const aw = (a.w) * scale;
-  const ah = (a.h) * scale;
-  const bw = (b.w) * scale;
-  const bh = (b.h) * scale;
-
-  const aHalfW = Math.max(0, aw / 2 - padding);
-  const aHalfH = Math.max(0, ah / 2 - padding);
-  const bHalfW = Math.max(0, bw / 2 - padding);
-  const bHalfH = Math.max(0, bh / 2 - padding);
-
-  return (Math.abs(a.cx - b.cx) <= (aHalfW + bHalfW)) && (Math.abs(a.cy - b.cy) <= (aHalfH + bHalfH));
-}
-
-// Dibuja cajas de colisión para debugging usando hitboxSizes
-function drawHitboxes() {
-  if (!player) return;
-  push();
-  colorMode(HSB, 360, 100, 100);
-  noFill();
-  strokeWeight(1.5);
-  rectMode(CENTER);
-
-  // player box desde hitboxSizes[0]
-  const ph = _getHitboxFor(player, 0);
-  stroke(200, 80, 90);
-  rect(ph.cx, ph.cy, ph.w, ph.h);
-
-  // cruz en el centro del jugador
-  stroke(0, 0, 100);
-  line(ph.cx - 6, ph.cy, ph.cx + 6, ph.cy);
-  line(ph.cx, ph.cy - 6, ph.cx, ph.cy + 6);
-
-  // item box desde hitboxSizes[1] si existe
-  if (typeof item !== 'undefined' && item) {
-    const ih = _getHitboxFor(item, 1);
-    stroke(40, 90, 90);
-    rect(ih.cx, ih.cy, ih.w, ih.h);
-
-    // marcar estado del item (locked/attached)
-    noStroke();
-    fill(0, 0, 100);
-    textSize(12);
-    textAlign(CENTER, TOP);
-    const label = item.attached ? 'attached' : (item.pickupLocked ? 'locked' : 'floor');
-    text(label, ih.cx, ih.cy + ih.h / 2 + 4);
-  }
-
-  pop();
-}
-
-const ITEM_SPRITE_FILE = 'spr_capa.png';
-const TABLA_SPRITE_FILE = 'tabla.png'; // <-- nuevo
-let itemSpriteSheet;
-let tablaSpriteSheet; // <-- nuevo
-let item;
-let capeEquipped = false;
-let capeTimer = 0;
-const CAPE_DURATION = 5000; // ms
-
-// nuevo: archivo de fondo nocturno y flag
-const BG_NIGHT_SPRITE_SHEET_FILE = 'fondo_noche.png';
-let bgNightSpriteSheet;
-let isNight = false;
+// --- nueva variable/constantes para rotación del mandala ---
+let mandalaRotation = 0;
+const MANDALA_ROT_SPEED = 0.9; // vueltas por segundo (ajusta a gusto: >0 gira)
+const MANDALA_ROT_EASE = 0.6;  // cuánto influye el fade en la velocidad (0..1)
 
 // --- NUEVAS VARIABLES PARA TRANSICIÓN / BLUR ---
 let pg;
@@ -405,14 +301,36 @@ function endLayer() {
 }
 
 function preload() {
-  try {
-    playerSpriteSheet = loadImage(SPRITE_SHEET_FILE);
-    bgSpriteSheet = loadImage(BG_SPRITE_SHEET_FILE);
-    itemSpriteSheet = loadImage(ITEM_SPRITE_FILE);
-    tablaSpriteSheet = loadImage(TABLA_SPRITE_FILE);
-    bgNightSpriteSheet = loadImage(BG_NIGHT_SPRITE_SHEET_FILE);
-  } catch (e) {
-    console.error("No se pudo cargar el archivo: " + SPRITE_SHEET_FILE);
+  playerSpriteSheet = loadImage(SPRITE_SHEET_FILE,
+    img => { playerSpriteSheet = img; },
+    err => { console.error("No se pudo cargar el archivo:", SPRITE_SHEET_FILE); playerSpriteSheet = null; }
+  );
+
+  bgSpriteSheet = loadImage(BG_SPRITE_SHEET_FILE,
+    img => { bgSpriteSheet = img; },
+    err => { console.warn("No se pudo cargar el archivo de fondo:", BG_SPRITE_SHEET_FILE); bgSpriteSheet = null; }
+  );
+
+  // cargar tabla como spritesheet (igual que el personaje)
+  tablaSpriteSheet = loadImage(TABLA_SPRITE_FILE,
+    img => { tablaSpriteSheet = img; },
+    err => { console.warn("No se pudo cargar tabla sprite:", TABLA_SPRITE_FILE); tablaSpriteSheet = null; }
+  );
+
+  // cargar fondo nocturno
+  bgNightSpriteSheet = loadImage(BG_NIGHT_SPRITE_SHEET_FILE,
+    img => { bgNightSpriteSheet = img; },
+    err => { console.warn("No se pudo cargar bg night sprite:", BG_NIGHT_SPRITE_SHEET_FILE); bgNightSpriteSheet = null; }
+  );
+
+  // opcional: item sprite si existe la constante
+  if (typeof ITEM_SPRITE_FILE !== 'undefined') {
+    itemSpriteSheet = loadImage(ITEM_SPRITE_FILE,
+      img => { itemSpriteSheet = img; },
+      err => { console.warn("No se pudo cargar item sprite:", ITEM_SPRITE_FILE); itemSpriteSheet = null; }
+    );
+  } else {
+    itemSpriteSheet = null;
   }
 }
 
@@ -549,6 +467,14 @@ function updateMandala() {
     const elapsed = now - mandalaTimer;
     mandalaFade = constrain(1 - elapsed / MANDALA_DURATION, 0, 1);
   }
+
+  // actualizar rotación del mandala (deltaTime en ms)
+  const dt = (typeof deltaTime !== 'undefined') ? deltaTime / 1000 : (1/60);
+  // velocidad en rad/s: MANDALA_ROT_SPEED vueltas/s -> * TWO_PI para rad/s
+  const speedFactor = (MANDALA_ROT_EASE * mandalaFade) + (1 - MANDALA_ROT_EASE) * 1.0;
+  mandalaRotation += dt * (MANDALA_ROT_SPEED * TWO_PI) * speedFactor;
+  // mantener en rango para evitar overflow
+  if (mandalaRotation > TWO_PI) mandalaRotation = mandalaRotation % TWO_PI;
 }
 
 function drawMandala() {
@@ -556,26 +482,69 @@ function drawMandala() {
 
   push();
   translate(mandalaPos.x, mandalaPos.y);
+  // aplicar rotación global del mandala
+  rotate(mandalaRotation);
+
   colorMode(HSB, 360, 100, 100, 1);
-  noFill();
+  noStroke();
   blendMode(ADD);
 
+  const time = millis() / 1000;
   const baseRadius = map(mandalaFade, 0, 1, 0, MANDALA_MAX_RADIUS);
-  const rings = 6;
-  for (let i = 0; i < rings; i++) {
-    const t = i / (rings - 1);
-    const r = baseRadius * (0.2 + 0.8 * t);
-    const sw = MANDALA_STROKE_WEIGHT * (1 - t) * mandalaFade;
-    strokeWeight(max(0.5, sw));
-    const h = (mandalaHue + i * 12) % 360;
-    stroke(h, 90, 100, 0.65 * mandalaFade);
-    ellipse(0, 0, r * 2, r * 2);
-  }
 
-  // un pequeño núcleo brillante
-  noStroke();
-  fill((mandalaHue + 20) % 360, 90, 100, 0.85 * mandalaFade);
-  ellipse(0, 0, max(6, baseRadius * 0.04), max(6, baseRadius * 0.04));
+  // parámetros de control (ajústalos si hace falta)
+  const RINGS = 6;
+  const MAX_TRIANGLES = 600;   // tope global para evitar sobrecarga
+  const SUBDIV_DEPTH = 2;      // profundidad de subdivisión (0..3 recomendados)
+  let drawn = 0;
+
+  for (let r = 0; r < RINGS && drawn < MAX_TRIANGLES; r++) {
+    const t = r / Math.max(1, RINGS - 1);
+    const ringRadius = baseRadius * (0.15 + 0.85 * t);
+    const triBase = ringRadius * (0.22 + 0.18 * (1 - t)); // tamaño relativo de triángulo
+    const count = max(3, floor(6 + r * 6)); // triángulos por anillo
+    const hueBase = (mandalaHue + r * 18) % 360;
+    const rotOffset = time * 0.25 * (r % 2 ? 1 : -1);
+
+    for (let i = 0; i < count && drawn < MAX_TRIANGLES; i++) {
+      const ang = i * (TWO_PI / count) + rotOffset;
+      const cx = cos(ang) * ringRadius;
+      const cy = sin(ang) * ringRadius;
+
+      // vértices de un triángulo orientado alrededor del punto (cx,cy)
+      const a1 = ang - 0.55;
+      const a2 = ang + 0.55;
+      const a3 = ang + PI;
+      const v1 = { x: cx + cos(a1) * triBase, y: cy + sin(a1) * triBase };
+      const v2 = { x: cx + cos(a2) * triBase, y: cy + sin(a2) * triBase };
+      const v3 = { x: cx + cos(a3) * (triBase * 0.6), y: cy + sin(a3) * (triBase * 0.6) };
+
+      // subdivisión iterativa (stack) para crear efecto fractal limitado
+      const stack = [{ v1, v2, v3, depth: 0 }];
+      while (stack.length && drawn < MAX_TRIANGLES) {
+        const it = stack.pop();
+        const depth = it.depth;
+
+        // alpha y color dependen de la profundidad y del anillo (menos carga visual en anillos externos)
+        const alpha = mandalaFade * lerp(0.12, 0.88, 1 - depth / Math.max(1, SUBDIV_DEPTH)) * lerp(1 - t * 0.7, 1, 1);
+        const hue = (hueBase + depth * 8 + sin(time * 1.8 + depth) * 6) % 360;
+        fill(hue, 90, 100, alpha);
+        triangle(it.v1.x, it.v1.y, it.v2.x, it.v2.y, it.v3.x, it.v3.y);
+        drawn++;
+
+        if (depth < SUBDIV_DEPTH) {
+          // crear 3 sub-triángulos por los puntos medios (no usar recursion)
+          const m12 = { x: (it.v1.x + it.v2.x) * 0.5, y: (it.v1.y + it.v2.y) * 0.5 };
+          const m23 = { x: (it.v2.x + it.v3.x) * 0.5, y: (it.v2.y + it.v3.y) * 0.5 };
+          const m31 = { x: (it.v3.x + it.v1.x) * 0.5, y: (it.v3.y + it.v1.y) * 0.5 };
+          // empujar con depth+1 (orden no importante)
+          stack.push({ v1: it.v1, v2: m12, v3: m31, depth: depth + 1 });
+          stack.push({ v1: m12, v2: it.v2, v3: m23, depth: depth + 1 });
+          stack.push({ v1: m31, v2: m23, v3: it.v3, depth: depth + 1 });
+        }
+      }
+    }
+  }
 
   blendMode(BLEND);
   colorMode(HSB, 360, 100, 100);
@@ -829,6 +798,219 @@ function drawTablaUnderPlayer(playerObj) {
     pop();
   } else {
     image(tablaSpriteSheet, drawX, drawY, drawW, drawH, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
+  }
+
+  pop();
+}
+
+// Dirección / escalado visual del sprite (valor por defecto)
+let side = 1;         // 1 = mirando a la derecha, -1 = izquierda
+let sideScale = 1;    // valor interpolado usado para flip suave
+const SIDE_STEP = 0.12; // cuánto cambia sideScale por frame (0..1)
+
+// estado de la capa / temporizador
+let capeEquipped = false;
+const CAPE_DURATION = 6000; // ms, ajusta a gusto
+let capeTimer = 0;
+
+// controles de carrera / double-tap (si no los tienes definidos)
+let runActive = { left: false, right: false, up: false, down: false };
+let runCooldownUntil = {};
+let lastKeyTime = {};
+const DOUBLE_TAP_MS = 250;
+const BASE_SPEED = 3.2;     // ajusta velocidad base
+const RUN_MULTIPLIER = 1.8; // multiplicador cuando se corre
+
+// hitboxSizes: editar aquí para ajustar cajas (index 0 = player, index 1 = item)
+let hitboxSizes = [
+  { w: FRAME_WIDTH * PLAYER_SCALE_FACTOR * 0.5, h: FRAME_HEIGHT * PLAYER_SCALE_FACTOR * 0.57, ox: 0, oy: 0 }, // player
+  // item/capa: un poco más estrecha que la del player
+  { w: FRAME_WIDTH * PLAYER_SCALE_FACTOR * 0.42, h: FRAME_HEIGHT * PLAYER_SCALE_FACTOR * 0.5, ox: 0, oy: 6 }  // item / capa
+];
+
+// toggle para mostrar hitboxes en pantalla
+let showHitboxes = false;
+
+// Hitbox editor UI + persistencia (editar hitboxSizes en tiempo real)
+let hitboxEditorVisible = false;
+const HITBOX_LS_KEY = 'visuales_murdans_hitboxes';
+let hitboxEditorEl = null;
+
+function loadHitboxesFromStorage() {
+  try {
+    const raw = localStorage.getItem(HITBOX_LS_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) hitboxSizes = parsed.map(h => Object.assign({ w: 0, h: 0, ox: 0, oy: 0 }, h));
+  } catch (e) {
+    console.warn('no se pudo cargar hitboxSizes desde storage', e);
+  }
+}
+
+function saveHitboxesToStorage() {
+  try {
+    localStorage.setItem(HITBOX_LS_KEY, JSON.stringify(hitboxSizes));
+  } catch (e) {
+    console.warn('no se pudo guardar hitboxSizes', e);
+  }
+}
+
+function createHitboxEditor() {
+  if (hitboxEditorEl) return;
+  const container = document.createElement('div');
+  container.id = 'hitbox-editor';
+  Object.assign(container.style, {
+    position: 'fixed', right: '12px', top: '12px',
+    background: 'rgba(0,0,0,0.7)', color: '#fff',
+    padding: '8px', zIndex: 9999, fontFamily: 'monospace',
+    fontSize: '13px', borderRadius: '6px', maxWidth: '320px'
+  });
+
+  const title = document.createElement('div'); title.textContent = 'Hitbox Editor';
+  title.style.fontWeight = '700';
+  container.appendChild(title);
+
+  const info = document.createElement('div');
+  info.style.margin = '6px 0';
+  info.innerHTML = 'Editar w / h / ox / oy &nbsp; <button id="hitbox-save">Guardar</button>';
+  container.appendChild(info);
+
+  const list = document.createElement('div'); list.id = 'hitbox-list'; container.appendChild(list);
+  document.body.appendChild(container);
+  hitboxEditorEl = container;
+
+  document.getElementById('hitbox-save').onclick = () => { saveHitboxesToStorage(); };
+  refreshHitboxEditor();
+}
+
+function refreshHitboxEditor() {
+  if (!hitboxEditorEl) return;
+  const list = hitboxEditorEl.querySelector('#hitbox-list');
+  list.innerHTML = '';
+  hitboxSizes.forEach((hb, idx) => {
+    const row = document.createElement('div'); row.style.margin = '8px 0';
+    const hdr = document.createElement('div');
+    hdr.textContent = `#${idx} — ${idx === 0 ? 'player' : 'item'}`;
+    hdr.style.fontWeight = '600';
+    row.appendChild(hdr);
+
+    const fields = ['w', 'h', 'ox', 'oy'];
+    fields.forEach(k => {
+      const wrapper = document.createElement('div');
+      wrapper.style.display = 'flex'; wrapper.style.gap = '6px'; wrapper.style.alignItems = 'center'; wrapper.style.marginTop = '4px';
+      const label = document.createElement('label'); label.textContent = k; label.style.width = '22px';
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.value = hb[k] || 0;
+      input.style.width = '90px';
+      // ajuste fino: mantener enteros
+      input.oninput = (ev) => { hitboxSizes[idx][k] = Number(ev.target.value); };
+      wrapper.appendChild(label); wrapper.appendChild(input);
+      row.appendChild(wrapper);
+    });
+
+    list.appendChild(row);
+  });
+}
+
+function toggleHitboxEditor() {
+  hitboxEditorVisible = !hitboxEditorVisible;
+  if (hitboxEditorVisible) {
+    createHitboxEditor();
+    hitboxEditorEl.style.display = 'block';
+    refreshHitboxEditor();
+  } else if (hitboxEditorEl) {
+    hitboxEditorEl.style.display = 'none';
+  }
+}
+
+// cargar al iniciar si hay guardado
+loadHitboxesFromStorage();
+
+// atajo teclado: H para abrir/cerrar editor sin interferir con p5 keyPressed
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') { toggleHitboxEditor(); e.preventDefault(); }
+});
+
+// helper: construir caja (cx,cy,w,h) a partir de objeto usando hitboxSizes cuando proceda
+function _getHitboxFor(obj, fallbackIndex = null) {
+  let def = null;
+  // Preferir la configuración por tipo si hay instancia de las clases
+  try {
+    if (typeof Player !== 'undefined' && obj instanceof Player) def = hitboxSizes[0];
+    else if (typeof Item !== 'undefined' && obj instanceof Item) def = hitboxSizes[1];
+  } catch (e) {
+    // en algunos entornos instanceof puede fallar; fallback a name check
+    if (obj && obj.constructor && obj.constructor.name === 'Player') def = hitboxSizes[0];
+    if (obj && obj.constructor && obj.constructor.name === 'Item') def = hitboxSizes[1];
+  }
+  if (!def && typeof fallbackIndex === 'number' && hitboxSizes[fallbackIndex]) def = hitboxSizes[fallbackIndex];
+
+  if (def) {
+    const ox = def.ox || 0;
+    const oy = def.oy || 0;
+    return {
+      cx: (obj.x ?? 0) + ox,
+      cy: (obj.y ?? 0) + oy,
+      w: (def.w ?? (obj.width ?? obj.w ?? 0)),
+      h: (def.h ?? (obj.height ?? obj.h ?? 0))
+    };
+  }
+
+  // fallback: usar dimensiones del propio objeto centradas en x,y
+  return {
+    cx: (obj.x ?? 0),
+    cy: (obj.y ?? 0),
+    w: (obj.width ?? obj.w ?? 0),
+    h: (obj.height ?? obj.h ?? 0)
+  };
+}
+
+// AABB collision que usa hitboxSizes para Player/Item por defecto
+function checkCollision(objA, objB, padding = 0, scale = 1) {
+  const a = _getHitboxFor(objA);
+  const b = _getHitboxFor(objB);
+
+  const aw = a.w * scale;
+  const ah = a.h * scale;
+  const bw = b.w * scale;
+  const bh = b.h * scale;
+
+  const aHalfW = Math.max(0, aw / 2 - padding);
+  const aHalfH = Math.max(0, ah / 2 - padding);
+  const bHalfW = Math.max(0, bw / 2 - padding);
+  const bHalfH = Math.max(0, bh / 2 - padding);
+
+  return (Math.abs(a.cx - b.cx) <= (aHalfW + bHalfW)) && (Math.abs(a.cy - b.cy) <= (aHalfH + bHalfH));
+}
+
+// Dibuja hitboxes en pantalla usando las mismas cajas que checkCollision
+function drawHitboxes() {
+  if (!player) return;
+  push();
+  colorMode(HSB, 360, 100, 100);
+  noFill();
+  strokeWeight(1.5);
+  rectMode(CENTER);
+
+  const ph = _getHitboxFor(player, 0);
+  stroke(200, 80, 90);
+  rect(ph.cx, ph.cy, ph.w, ph.h);
+  stroke(0, 0, 100);
+  line(ph.cx - 6, ph.cy, ph.cx + 6, ph.cy);
+  line(ph.cx, ph.cy - 6, ph.cx, ph.cy + 6);
+
+  if (typeof item !== 'undefined' && item) {
+    const ih = _getHitboxFor(item, 1);
+    stroke(40, 90, 90);
+    rect(ih.cx, ih.cy, ih.w, ih.h);
+
+    noStroke();
+    fill(0, 0, 100);
+    textSize(12);
+    textAlign(CENTER, TOP);
+    const label = item.attached ? 'attached' : (item.pickupLocked ? 'locked' : 'floor');
+    text(label, ih.cx, ih.cy + ih.h / 2 + 4);
   }
 
   pop();
