@@ -34,7 +34,9 @@ let hitboxSizes = [
 ];
 let showHitboxes = false;
 const ITEM_SPRITE_FILE = 'spr_capa.png';
+const TABLA_SPRITE_FILE = 'tabla.png'; // <-- nuevo
 let itemSpriteSheet;
+let tablaSpriteSheet; // <-- nuevo
 let item;
 let capeEquipped = false;
 let capeTimer = 0;
@@ -58,12 +60,18 @@ const MAX_BLUR = 2;      // blur máximo (ajustable)
 const BLEND_SPEED = 0.06;
 const BLUR_DEFAULT_DURATION = 500; // ms -> medio segundo (pulse total)
 const ATTACHED_SCALE = 1.6; // escala de la capa cuando está puesta (ajusta aquí)
+// Nuevo: offsets y suavizado de seguimiento
+const ATTACHED_OFFSET_X = 12;   // distancia horizontal desde el centro del jugador (más cerca)
+// Antes era -10; ahora sumamos +16px para dibujar la capa 16px más abajo cuando está puesta
+const ATTACHED_OFFSET_Y = 6;    // altura relativa al centro del jugador (en px)
+const ATTACHED_FOLLOW_LERP = 0.22; // 0..1, qué tan rápido sigue la capa
 
 function preload() {
   try {
     playerSpriteSheet = loadImage(SPRITE_SHEET_FILE);
     bgSpriteSheet = loadImage(BG_SPRITE_SHEET_FILE);
     itemSpriteSheet = loadImage(ITEM_SPRITE_FILE);
+    tablaSpriteSheet = loadImage(TABLA_SPRITE_FILE); // <-- cargar tabla
     // nuevo: cargar fondo nocturno en preload para cambiar instantáneamente
     bgNightSpriteSheet = loadImage(BG_NIGHT_SPRITE_SHEET_FILE);
   } catch (e) {
@@ -205,6 +213,10 @@ function draw() {
     bgBlendTarget = 1;
     setBlurPulse(MAX_BLUR, BLUR_DEFAULT_DURATION);
     item.pickupLocked = true;
+    // iniciar posición de la capa justo cerca del jugador para evitar "salto"
+    const initDir = -side;
+    item.x = player.x + initDir * ATTACHED_OFFSET_X;
+    item.y = player.y + ATTACHED_OFFSET_Y;
   }
 
   // Temporizador de la capa
@@ -229,6 +241,15 @@ function draw() {
     item.pickupLocked = false;
   }
 
+  // Si la capa está puesta, hacer que la capa siga suavemente la posición objetivo del jugador
+  if (item && item.attached) {
+    const dir = -side; // la capa va al lado opuesto
+    const targetX = player.x + dir * ATTACHED_OFFSET_X;
+    const targetY = player.y + ATTACHED_OFFSET_Y;
+    item.x = lerp(item.x, targetX, ATTACHED_FOLLOW_LERP);
+    item.y = lerp(item.y, targetY, ATTACHED_FOLLOW_LERP);
+  }
+
   // --- DIBUJADO: fondo y elementos en el orden correcto ---
   // fondo (con crossfade)
   drawBackgroundSprite();
@@ -237,19 +258,23 @@ function draw() {
   updateMandala();
   drawMandala();
 
-  // si la capa está puesta -> dibujarla ANTES del jugador (queda detrás del jugador)
-  if (item && item.attached) {
-    item.displayAttached(player);
+  // NUEVO ORDEN: tabla debajo, luego capa attached (encima de la tabla), luego jugador (encima de la capa)
+  if (tablaSpriteSheet) {
+    drawTablaUnderPlayer(player);   // tabla primero (más abajo)
   }
 
-  // dibujar jugador
+  if (item && item.attached) {
+    item.displayAttached(player);   // capa encima de la tabla
+  }
+
+  // dibujar jugador encima de la capa
   player.display();
 
   // si la capa NO está puesta en el jugador, dibujarla en su posición de suelo (por encima del jugador)
   if (item && !item.attached) {
     item.display();
   }
-
+  
   // UI / hitboxes / texto de estado
   if (showHitboxes) {
     drawHitboxes();
@@ -400,8 +425,6 @@ class Item {
   // dibujo cuando está puesta en el jugador (se dibuja detrás del jugador)
   displayAttached(playerObj) {
     if (!itemSpriteSheet) return;
-
-    // calcular frame
     const totalFrames = max(1, floor(itemSpriteSheet.width / FRAME_WIDTH));
     const t = millis() / (1000 / this.frameRate);
     const frameIndex = floor(t) % totalFrames;
@@ -409,32 +432,21 @@ class Item {
     const sy = 0;
 
     push();
-    // offsets configurables
-    const offsetY = -10;                 // altura relativa al centro del jugador
-    const offsetDistX = 26 * ATTACHED_SCALE; // distancia horizontal desde el centro del jugador
+    // usar la propia posición item.x/item.y (actualizada por el follow)
+    translate(this.x, this.y);
 
-    // queremos que la capa se dibuje hacia el lado contrario de `side`
-    // si side == 1 (jugador mira a la derecha) -> la capa se dibuja a la izquierda: dir = -side
-    const dir = -side; // -1 o 1
+    // la capa apunta al lado opuesto: usamos dir para calcular rotación coherente
+    const dir = -side;
+    rotate(-0.4 * dir);
 
-    // colocamos el origen en la posición objetivo (centro del jugador + offset lateral/opuesto)
-    translate(playerObj.x + dir * offsetDistX, playerObj.y + offsetY);
-
-    // aplicar escala para tamaño e inversión horizontal según sea necesario
-    // scaleX = dir * ATTACHED_SCALE (si dir = -1 -> voltea horizontalmente)
-    scale(dir * ATTACHED_SCALE, ATTACHED_SCALE);
-
-    // rotación ligera para que "cuelgue" coherente con la dirección
-    // rotar en sentido que haga que la capa apunte hacia dir
-    rotate(-0.4 * dir); // ajusta 0.4 (radianes) si quieres otra inclinación
+    // Voltear horizontalmente según side (side = 1 normal, -1 espejo)
+    scale(side, 1);
 
     imageMode(CENTER);
     noTint();
 
-    // dibujar el frame (usamos FRAME_WIDTH/HEIGHT como fuente)
-    const displayW = FRAME_WIDTH;  // ya escalamos con scale(), así dejamos el width igual a frame
-    const displayH = FRAME_HEIGHT;
-    image(itemSpriteSheet, 0, 0, displayW, displayH, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
+    // Usar exactly the same drawn size as cuando está en el suelo
+    image(itemSpriteSheet, 0, 0, this.w, this.h, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
     pop();
   }
 }
@@ -529,4 +541,40 @@ function setBlurPulse(target, duration = BLUR_DEFAULT_DURATION) {
   blurPulseStart = millis();
   blurPulseDuration = Math.max(0, duration);
   blurPulseTarget = target;
+}
+
+// nueva función: dibuja tabla debajo del jugador pero por encima de la capa,
+// usando el mismo índice de frame que el jugador para mantener timing.
+function drawTablaUnderPlayer(playerObj) {
+  if (!tablaSpriteSheet) return;
+
+  // calcular frame sincronizado con el jugador
+  const frameIndex = playerObj.currentFrame || 0;
+  const sx = frameIndex * FRAME_WIDTH;
+  const sy = 0;
+
+  push();
+  imageMode(CENTER);
+
+  // posición ligeramente por debajo/centro del jugador (ajusta offsets si hace falta)
+  const offsetY = 6;      // desplaza la tabla verticalmente respecto al centro del jugador
+  const offsetX = 0;      // si quieres desplazar lateralmente según side, ajusta aquí
+  const drawX = playerObj.x + offsetX;
+  const drawY = playerObj.y + offsetY;
+
+  // tamaño: seguir tamaño del jugador (se puede ajustar)
+  const drawW = playerObj.width * 1.05;
+  const drawH = playerObj.height * 1.05;
+
+  // si la tabla necesita flip según side para mantener coherencia, aplicarlo:
+  if (side === -1) {
+    // voltear horizontalmente alrededor del punto de dibujo
+    translate(drawX, drawY);
+    scale(-1, 1);
+    image(tablaSpriteSheet, 0, 0, drawW, drawH, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
+  } else {
+    image(tablaSpriteSheet, drawX, drawY, drawW, drawH, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
+  }
+
+  pop();
 }
