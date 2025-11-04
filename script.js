@@ -335,6 +335,8 @@ function draw() {
     const initDir = -side;
     item.x = player.x + initDir * ATTACHED_OFFSET_X;
     item.y = player.y + ATTACHED_OFFSET_Y;
+    // <-- nueva línea: generar partículas al recoger
+    spawnPickupParticles(player.x, player.y);
   }
 
   // Temporizador de la capa
@@ -369,6 +371,9 @@ function draw() {
     item.y = lerp(item.y, targetY, ATTACHED_FOLLOW_LERP);
   }
 
+  // actualizar partículas (si las hay)
+  updateParticles();
+
   // fondo (full canvas)
   push();
   resetMatrix();
@@ -398,6 +403,10 @@ function draw() {
     // jugador (capa frontal, depth = 1 para seguir completamente)
     applyLayer(1.0, 1.0);
     player.display();
+
+    // dibujar partículas EN LA MISMA CAPA que el jugador (sobre/encima del sprite)
+    drawParticles();
+
     endLayer();
 
     // item en suelo (por encima del jugador cuando no está attached), muy cercano
@@ -415,6 +424,9 @@ function draw() {
     if (item && item.attached) item.displayAttached(player);
 
     player.display();
+
+    // dibujar partículas en visión normal (mismas coordenadas de mundo)
+    drawParticles();
 
     if (item && !item.attached) item.display();
   }
@@ -603,6 +615,108 @@ class Item {
     image(itemSpriteSheet, 0, 0, this.w, this.h, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
     pop();
   }
+}
+
+// === PARTICULAS AL RECOGER LA CAPA (ajustadas: expansión antigravedad psicodélica) ===
+let particles = [];
+const PARTICLE_COUNT = 140;        // más partículas
+const PARTICLE_MIN_SPEED = 80;     // px/s (inicial)
+const PARTICLE_MAX_SPEED = 420;    // px/s (inicial)
+const PARTICLE_MIN_SIZE = 8;       // tamaño inicial mínimo (más grande)
+const PARTICLE_MAX_SIZE = 28;      // tamaño inicial máximo (más grande)
+const PARTICLE_LIFE = 1000;        // ms (vida total)
+const PARTICLE_PEAK_RATIO = 0.18;  // fracción de vida en la que alcanzan tamaño máximo
+const PARTICLE_ANTIGRAV = -0.0009; // aceleración Y (px / ms^2) negativa -> antigravedad
+const PARTICLE_SWIRL = 0.0025;     // fuerza de giro lateral (px/ms^2)
+
+class Particle {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    const a = random(TWO_PI);
+    const s = random(PARTICLE_MIN_SPEED, PARTICLE_MAX_SPEED) / 1000.0; // px per ms
+    // initial velocity strong outwards
+    this.vx = Math.cos(a) * s;
+    this.vy = Math.sin(a) * s;
+    // size: start smaller then expand to peakSize then shrink
+    this.startSize = random(PARTICLE_MIN_SIZE * 0.6, PARTICLE_MIN_SIZE);
+    this.peakSize = random(PARTICLE_MIN_SIZE, PARTICLE_MAX_SIZE);
+    this.size = this.startSize;
+    this.birth = millis();
+    this.life = PARTICLE_LIFE;
+    // color aleatorio en HSB (ya está colorMode HSB en setup)
+    this.h = random(0, 360);
+    this.sat = random(70, 100);
+    this.bright = random(70, 100);
+    this.alpha = 1;
+    // swirl direction
+    this.swirlDir = random() < 0.5 ? -1 : 1;
+    // small random angular phase
+    this.phase = random(TWO_PI);
+  }
+  update(dt) {
+    // dt en ms
+    // aplicar antigravedad (empuje hacia arriba)
+    this.vy += PARTICLE_ANTIGRAV * dt;
+    // aplicar ligero giro lateral dependiente del tiempo -> psicodélico
+    const ttime = (millis() - this.birth) / 1000.0;
+    const swirl = Math.sin(ttime * 10 + this.phase) * PARTICLE_SWIRL * this.swirlDir;
+    this.vx += swirl * dt;
+
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+
+    const age = millis() - this.birth;
+    const u = constrain(age / this.life, 0, 1);
+
+    // crecimiento hasta peak (easeOut), luego decrecimiento (easeIn)
+    if (u <= PARTICLE_PEAK_RATIO) {
+      const p = u / PARTICLE_PEAK_RATIO;
+      const eased = 1 - Math.pow(1 - p, 3);
+      this.size = lerp(this.startSize, this.peakSize, eased);
+    } else {
+      const p = (u - PARTICLE_PEAK_RATIO) / (1 - PARTICLE_PEAK_RATIO);
+      const eased = 1 - Math.pow(p, 2);
+      this.size = lerp(this.peakSize, 0, 1 - eased);
+    }
+
+    this.alpha = 1 - u;
+    return u >= 1.0;
+  }
+  draw() {
+    push();
+    // efecto additivo y brillo psicodélico
+    blendMode(ADD);
+    noStroke();
+    fill(this.h, this.sat, this.bright, this.alpha * 255);
+    // dibujar un círculo con ligera corona (dos tamaños) para glow
+    ellipse(this.x, this.y, this.size, this.size);
+    // un halo sutil
+    fill(this.h, this.sat, min(100, this.bright + 20), this.alpha * 120);
+    ellipse(this.x, this.y, this.size * 1.6, this.size * 1.6);
+    pop();
+  }
+}
+
+function spawnPickupParticles(x, y) {
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    particles.push(new Particle(x, y));
+  }
+}
+
+function updateParticles() {
+  if (particles.length === 0) return;
+  const dt = deltaTime; // ms
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const dead = particles[i].update(dt);
+    if (dead) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  if (particles.length === 0) return;
+  // dibujar con blendMode normal restaurado dentro de cada particula
+  for (let p of particles) p.draw();
 }
 
 function updateMandala() {
