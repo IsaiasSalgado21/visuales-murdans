@@ -9,6 +9,14 @@ const BG_NUM_FRAMES = 3;
 const BG_FRAME_RATE = 0.1;
 const CANVAS_SCALE = 0.95;
 const PLAYER_SCALE_FACTOR = 1.1;
+
+// velocidad de interpolación para crossfade/bg blend
+const BLEND_SPEED = 0.06;
+
+// offsets de dibujo del sprite (compensan el anclaje del sprite)
+const PLAYER_DRAW_OFFSET_X = 0;
+const PLAYER_DRAW_OFFSET_Y = 6;
+
 const GAME_WIDTH = 1024;
 const GAME_HEIGHT = 576;
 const MANDALA_MAX_RADIUS = 1050;
@@ -34,7 +42,94 @@ let hitboxSizes = [
   { w: FRAME_WIDTH * PLAYER_SCALE_FACTOR * 0.5, h: FRAME_HEIGHT * PLAYER_SCALE_FACTOR * 0.57, ox: 0, oy: 0 }, // player
   { w: FRAME_WIDTH * PLAYER_SCALE_FACTOR * 0.3, h: FRAME_HEIGHT * PLAYER_SCALE_FACTOR * 0.4, ox: 0, oy: 0 }  // item
 ];
+
+// Mostrar/ocultar hitboxes (se alterna con la tecla '1')
 let showHitboxes = false;
+
+// helper: obtener caja (centro + w/h) a usar para colisión/dibujo
+function _getHitboxFor(obj, fallbackIndex = null) {
+  // si hay entries en hitboxSizes y el objeto parece Player/Item, usar índice por tipo
+  let def = null;
+  if (obj instanceof Player) def = hitboxSizes[0];
+  else if (obj instanceof Item) def = hitboxSizes[1];
+  else if (typeof fallbackIndex === 'number' && hitboxSizes[fallbackIndex]) def = hitboxSizes[fallbackIndex];
+
+  if (def) {
+    const ox = def.ox || 0;
+    const oy = def.oy || 0;
+    // caja centrada en obj.x+ox, obj.y+oy
+    return {
+      cx: (obj.x ?? 0) + ox,
+      cy: (obj.y ?? 0) + oy,
+      w: def.w ?? (obj.width ?? obj.w ?? 0),
+      h: def.h ?? (obj.height ?? obj.h ?? 0)
+    };
+  }
+
+  // fallback: usar dimensiones del propio objeto centradas en x,y
+  return {
+    cx: (obj.x ?? 0),
+    cy: (obj.y ?? 0),
+    w: (obj.width ?? obj.w ?? 0),
+    h: (obj.height ?? obj.h ?? 0)
+  };
+}
+
+// AABB collision helper que usa hitboxSizes por defecto para Player/Item
+function checkCollision(objA, objB, padding = 0, scale = 1) {
+  const a = _getHitboxFor(objA);
+  const b = _getHitboxFor(objB);
+
+  const aw = (a.w) * scale;
+  const ah = (a.h) * scale;
+  const bw = (b.w) * scale;
+  const bh = (b.h) * scale;
+
+  const aHalfW = Math.max(0, aw / 2 - padding);
+  const aHalfH = Math.max(0, ah / 2 - padding);
+  const bHalfW = Math.max(0, bw / 2 - padding);
+  const bHalfH = Math.max(0, bh / 2 - padding);
+
+  return (Math.abs(a.cx - b.cx) <= (aHalfW + bHalfW)) && (Math.abs(a.cy - b.cy) <= (aHalfH + bHalfH));
+}
+
+// Dibuja cajas de colisión para debugging usando hitboxSizes
+function drawHitboxes() {
+  if (!player) return;
+  push();
+  colorMode(HSB, 360, 100, 100);
+  noFill();
+  strokeWeight(1.5);
+  rectMode(CENTER);
+
+  // player box desde hitboxSizes[0]
+  const ph = _getHitboxFor(player, 0);
+  stroke(200, 80, 90);
+  rect(ph.cx, ph.cy, ph.w, ph.h);
+
+  // cruz en el centro del jugador
+  stroke(0, 0, 100);
+  line(ph.cx - 6, ph.cy, ph.cx + 6, ph.cy);
+  line(ph.cx, ph.cy - 6, ph.cx, ph.cy + 6);
+
+  // item box desde hitboxSizes[1] si existe
+  if (typeof item !== 'undefined' && item) {
+    const ih = _getHitboxFor(item, 1);
+    stroke(40, 90, 90);
+    rect(ih.cx, ih.cy, ih.w, ih.h);
+
+    // marcar estado del item (locked/attached)
+    noStroke();
+    fill(0, 0, 100);
+    textSize(12);
+    textAlign(CENTER, TOP);
+    const label = item.attached ? 'attached' : (item.pickupLocked ? 'locked' : 'floor');
+    text(label, ih.cx, ih.cy + ih.h / 2 + 4);
+  }
+
+  pop();
+}
+
 const ITEM_SPRITE_FILE = 'spr_capa.png';
 const TABLA_SPRITE_FILE = 'tabla.png'; // <-- nuevo
 let itemSpriteSheet;
@@ -58,15 +153,27 @@ let blurAmount = 0;      // valor actual de blur (p5 filter)
 let blurPulseStart = 0;
 let blurPulseDuration = 0;
 let blurPulseTarget = 0;
-const MAX_BLUR = 3;      // blur máximo (ajustable)
-const BLEND_SPEED = 0.06;
-const BLUR_DEFAULT_DURATION = 500; // ms -> medio segundo (pulse total)
-const ATTACHED_SCALE = 1.6; // escala de la capa cuando está puesta (ajusta aquí)
-// Nuevo: offsets y suavizado de seguimiento
-const ATTACHED_OFFSET_X = 12;   // distancia horizontal desde el centro del jugador (más cerca)
-// Antes era -10; ahora sumamos +16px para dibujar la capa 16px más abajo cuando está puesta
-const ATTACHED_OFFSET_Y = 6;    // altura relativa al centro del jugador (en px)
-const ATTACHED_FOLLOW_LERP = 0.22; // 0..1, qué tan rápido sigue la capa
+
+// CONSTANTES FALTANTES (evitan ReferenceError)
+const MAX_BLUR = 12;               // máximo blur aplicable (ajustar según gusto)
+const BLUR_DEFAULT_DURATION = 700; // ms por defecto para el pulso de blur
+
+// offsets y lerp para la capa (attached)
+const ATTACHED_OFFSET_X = 28;      // separación lateral de la capa respecto al jugador
+const ATTACHED_OFFSET_Y = 8;       // separación vertical de la capa respecto al jugador
+const ATTACHED_FOLLOW_LERP = 0.12; // cuánto sigue la capa la posición objetivo
+
+// Añadir helper para iniciar un pulso de blur
+function setBlurPulse(amount, durationMs) {
+  blurPulseTarget = constrain(amount, 0, MAX_BLUR);
+  blurPulseDuration = max(0, durationMs | 0); // asegurar entero no negativo
+  blurPulseStart = millis();
+  // opcional: si duration es 0 aplicamos directamente
+  if (blurPulseDuration === 0) {
+    blurAmount = blurPulseTarget;
+    blurPulseTarget = 0;
+  }
+}
 
 // --- CÁMARA / PARALLAX ---
 let camX = 0, camY = 0;          // posición de cámara (mundo)
@@ -302,12 +409,10 @@ function preload() {
     playerSpriteSheet = loadImage(SPRITE_SHEET_FILE);
     bgSpriteSheet = loadImage(BG_SPRITE_SHEET_FILE);
     itemSpriteSheet = loadImage(ITEM_SPRITE_FILE);
-    tablaSpriteSheet = loadImage(TABLA_SPRITE_FILE); // <-- cargar tabla
-    // nuevo: cargar fondo nocturno en preload para cambiar instantáneamente
+    tablaSpriteSheet = loadImage(TABLA_SPRITE_FILE);
     bgNightSpriteSheet = loadImage(BG_NIGHT_SPRITE_SHEET_FILE);
   } catch (e) {
     console.error("No se pudo cargar el archivo: " + SPRITE_SHEET_FILE);
-    console.error("Asegúrate de que el archivo esté subido al editor p5.js.");
   }
 }
 
@@ -332,7 +437,7 @@ function scaleCanvasToWindow() {
 
 function setup() {
   let cnv = createCanvas(GAME_WIDTH, GAME_HEIGHT);
-  cnvEl = cnv.canvas; 
+  cnvEl = cnv.canvas;
   pixelDensity(1);
   noSmooth();
   colorMode(HSB, 360, 100, 100);
@@ -340,21 +445,20 @@ function setup() {
   document.body.style.overflow = 'hidden';
   cnvEl.style.width = `${GAME_WIDTH}px`;
   cnvEl.style.height = `${GAME_HEIGHT}px`;
-  scaleCanvasToWindow(); // centra y escala inicialmente
+  scaleCanvasToWindow();
 
-  // buffer para copiar la pantalla y aplicar filtro blur
   pg = createGraphics(GAME_WIDTH, GAME_HEIGHT);
   pg.pixelDensity(1);
   pg.noSmooth();
 
-  // buffer para el overlay de orillas (dibujamos en él y aplicamos BLUR)
   edgeBuffer = createGraphics(GAME_WIDTH, GAME_HEIGHT);
   edgeBuffer.pixelDensity(1);
   edgeBuffer.noSmooth();
   edgeBuffer.clear();
 
+  // ahora usamos las clases movidas a player.js/item.js
   player = new Player(
-    width / 2 - 250, // mueve 50px a la izquierda
+    width / 2 - 250,
     height / 2,
     FRAME_WIDTH * PLAYER_SCALE_FACTOR,
     FRAME_HEIGHT * PLAYER_SCALE_FACTOR
@@ -365,7 +469,6 @@ function setup() {
   mandalaPos = createVector(player.x, player.y);
   mandalaTimer = millis();
 
-  // inicializar cámara con la posición inicial del jugador
   initCamera();
 }
 
@@ -428,6 +531,55 @@ function keyReleased() {
   const dir = _dirFromKeyEvent();
   if (!dir) return;
   runActive[dir] = false;
+}
+
+function updateMandala() {
+  const now = millis();
+
+  // si ha pasado el intervalo, reiniciamos el mandala (fade = 1)
+  if (now - mandalaTimer >= MANDALA_INTERVAL) {
+    mandalaTimer = now;
+    mandalaFade = 1.0;
+    mandalaHue = (mandalaHue + 40) % 360;
+    if (mandalaPos && player) mandalaPos.set(player.x, player.y);
+  }
+
+  // decrecer el fade sobre la duración
+  if (mandalaFade > 0) {
+    const elapsed = now - mandalaTimer;
+    mandalaFade = constrain(1 - elapsed / MANDALA_DURATION, 0, 1);
+  }
+}
+
+function drawMandala() {
+  if (!mandalaPos || mandalaFade <= 0.001) return;
+
+  push();
+  translate(mandalaPos.x, mandalaPos.y);
+  colorMode(HSB, 360, 100, 100, 1);
+  noFill();
+  blendMode(ADD);
+
+  const baseRadius = map(mandalaFade, 0, 1, 0, MANDALA_MAX_RADIUS);
+  const rings = 6;
+  for (let i = 0; i < rings; i++) {
+    const t = i / (rings - 1);
+    const r = baseRadius * (0.2 + 0.8 * t);
+    const sw = MANDALA_STROKE_WEIGHT * (1 - t) * mandalaFade;
+    strokeWeight(max(0.5, sw));
+    const h = (mandalaHue + i * 12) % 360;
+    stroke(h, 90, 100, 0.65 * mandalaFade);
+    ellipse(0, 0, r * 2, r * 2);
+  }
+
+  // un pequeño núcleo brillante
+  noStroke();
+  fill((mandalaHue + 20) % 360, 90, 100, 0.85 * mandalaFade);
+  ellipse(0, 0, max(6, baseRadius * 0.04), max(6, baseRadius * 0.04));
+
+  blendMode(BLEND);
+  colorMode(HSB, 360, 100, 100);
+  pop();
 }
 
 function draw() {
@@ -642,329 +794,17 @@ function drawBackgroundSprite() {
   bgCurrentFrame = (bgCurrentFrame + BG_FRAME_RATE) % BG_NUM_FRAMES;
 }
 
-// --- Ajustes visuales: offset de dibujo del jugador ---
-const PLAYER_DRAW_OFFSET_X = -6; // mueve el sprite en X (ajusta para centrar)
-const PLAYER_DRAW_OFFSET_Y = -6; // mueve el sprite en Y (ajusta para centrar)
+// --- Player class moved to player.js ---
+/* Player class moved to player.js. Keep this placeholder to avoid redeclaration.
+   Ensure player.js is loaded before script.js in index.html. */
 
-class Player {
-  constructor(x, y, w, h) {
-    this.x = x;this.y = y;this.width = w;this.height = h;this.currentFrame = 0;this.animationCounter = 0;
-  }
+// --- Item class moved to item.js ---
+/* Item class moved to item.js. Keep this placeholder to avoid redeclaration.
+   Ensure item.js is loaded before script.js in index.html. */
 
-  update() {
-    let leftDown = keyIsDown(LEFT_ARROW) || keyIsDown(65);   // 65 = 'A'
-    let rightDown = keyIsDown(RIGHT_ARROW) || keyIsDown(68); // 68 = 'D'
-    let upDown = keyIsDown(UP_ARROW) || keyIsDown(87);       // 87 = 'W'
-    let downDown = keyIsDown(DOWN_ARROW) || keyIsDown(83);   // 83 = 'S'
-
-    if (leftDown) {
-      const speed = BASE_SPEED * (runActive.left ? RUN_MULTIPLIER : 1);
-      this.x -= speed;
-      side=-1;
-    }
-    if (rightDown) {
-      const speed = BASE_SPEED * (runActive.right ? RUN_MULTIPLIER : 1);
-      this.x += speed;
-      side=1;
-    }
-    if (upDown) {
-      const speed = BASE_SPEED * (runActive.up ? RUN_MULTIPLIER : 1);
-      this.y -= speed;
-    }
-    if (downDown) {
-      const speed = BASE_SPEED * (runActive.down ? RUN_MULTIPLIER : 1);
-      this.y += speed;
-    }
-
-    this.x = constrain(this.x, this.width / 2, width - this.width / 2);
-    this.y = constrain(this.y, this.height / 2, height - this.height / 2);
-
-    this.animationCounter++;
-    if (this.animationCounter >= playerFrameRate) {this.currentFrame = (this.currentFrame + 1) % numPlayerFrames;this.animationCounter = 0;}
-  }
-
-  display() {
-    if (playerSpriteSheet) {
-      push();
-      // aplicar offset visual al dibujar (no cambia la posición lógica ni colisiones)
-      translate(this.x + PLAYER_DRAW_OFFSET_X, this.y + PLAYER_DRAW_OFFSET_Y);
-      // usar sideScale (animado) para efecto de giro en lugar de side directo
-      const flipProgress = 1 - Math.abs(sideScale); // 0 cuando normal, 1 cuando en "centro" del giro
-      const tilt = flipProgress * 0.6 * Math.sign(side); // inclinación suave durante el giro
-      rotate(tilt);
-      scale(sideScale, 1);
-      imageMode(CENTER);
-      const sx = this.currentFrame * FRAME_WIDTH;
-      const sy = 0;
-      image(playerSpriteSheet, 0, 0, this.width, this.height, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
-      pop();
-    } else {
-      fill(0, 100, 100);
-      ellipse(this.x + PLAYER_DRAW_OFFSET_X, this.y + PLAYER_DRAW_OFFSET_Y, this.width, this.height);
-    }
-  }
-}
-
-class Item {
-  constructor(x, y, w, h) {
-    this.x = x;
-    this.y = y;
-    this.w = w;
-    this.h = h;
-    this.frameRate = 8;
-    this.visible = true;
-    this.pickupLocked = false;
-    this.attached = false; // <-- nueva bandera: está puesta en el personaje
-  }
-
-  // dibujo normal (suelo)
-  display() {
-    if (!this.visible) return;
-    if (!itemSpriteSheet) {
-      push();
-      fill(0, 0, 100);
-      rectMode(CENTER);
-      rect(this.x, this.y, this.w, this.h);
-      pop();
-      return;
-    }
-    const totalFrames = max(1, floor(itemSpriteSheet.width / FRAME_WIDTH));
-    const t = millis() / (1000 / this.frameRate);
-    const frameIndex = floor(t) % totalFrames;
-    const sx = frameIndex * FRAME_WIDTH;
-    const sy = 0;
-    imageMode(CENTER);
-    image(itemSpriteSheet, this.x, this.y, this.w, this.h, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
-  }
-
-  // dibujo cuando está puesta en el jugador (se dibuja detrás del jugador)
-  displayAttached(playerObj) {
-    if (!itemSpriteSheet) return;
-    const totalFrames = max(1, floor(itemSpriteSheet.width / FRAME_WIDTH));
-    const t = millis() / (1000 / this.frameRate);
-    const frameIndex = floor(t) % totalFrames;
-    const sx = frameIndex * FRAME_WIDTH;
-    const sy = 0;
-
-    push();
-    // usar la propia posición item.x/item.y (actualizada por el follow)
-    translate(this.x, this.y);
-
-    // la capa apunta al lado opuesto: usamos el discrete 'side' para la dirección lógica
-    const dir = -side;
-    rotate(-0.4 * dir);
-
-    // Voltear horizontalmente según sideScale (animado) y mantener tamaño this.w/this.h
-    scale(sideScale, 1);
-
-    imageMode(CENTER);
-    noTint();
-
-    image(itemSpriteSheet, 0, 0, this.w, this.h, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
-    pop();
-  }
-}
-
-// === PARTICULAS AL RECOGER LA CAPA (ajustadas: expansión antigravedad psicodélica) ===
-let particles = [];
-const PARTICLE_COUNT = 140;        // más partículas
-const PARTICLE_MIN_SPEED = 80;     // px/s (inicial)
-const PARTICLE_MAX_SPEED = 420;    // px/s (inicial)
-const PARTICLE_MIN_SIZE = 8;       // tamaño inicial mínimo (más grande)
-const PARTICLE_MAX_SIZE = 28;      // tamaño inicial máximo (más grande)
-const PARTICLE_LIFE = 1000;        // ms (vida total)
-const PARTICLE_PEAK_RATIO = 0.18;  // fracción de vida en la que alcanzan tamaño máximo
-const PARTICLE_ANTIGRAV = -0.0009; // aceleración Y (px / ms^2) negativa -> antigravedad
-const PARTICLE_SWIRL = 0.0025;     // fuerza de giro lateral (px/ms^2)
-
-class Particle {
-  constructor(x, y) {
-    this.x = x;
-    this.y = y;
-    const a = random(TWO_PI);
-    const s = random(PARTICLE_MIN_SPEED, PARTICLE_MAX_SPEED) / 1000.0; // px per ms
-    // initial velocity strong outwards
-    this.vx = Math.cos(a) * s;
-    this.vy = Math.sin(a) * s;
-    // size: start smaller then expand to peakSize then shrink
-    this.startSize = random(PARTICLE_MIN_SIZE * 0.6, PARTICLE_MIN_SIZE);
-    this.peakSize = random(PARTICLE_MIN_SIZE, PARTICLE_MAX_SIZE);
-    this.size = this.startSize;
-    this.birth = millis();
-    this.life = PARTICLE_LIFE;
-    // color aleatorio en HSB (ya está colorMode HSB en setup)
-    this.h = random(0, 360);
-    this.sat = random(70, 100);
-    this.bright = random(70, 100);
-    this.alpha = 1;
-    // swirl direction
-    this.swirlDir = random() < 0.5 ? -1 : 1;
-    // small random angular phase
-    this.phase = random(TWO_PI);
-  }
-  update(dt) {
-    // dt en ms
-    // aplicar antigravedad (empuje hacia arriba)
-    this.vy += PARTICLE_ANTIGRAV * dt;
-    // aplicar ligero giro lateral dependiente del tiempo -> psicodélico
-    const ttime = (millis() - this.birth) / 1000.0;
-    const swirl = Math.sin(ttime * 10 + this.phase) * PARTICLE_SWIRL * this.swirlDir;
-    this.vx += swirl * dt;
-
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-
-    const age = millis() - this.birth;
-    const u = constrain(age / this.life, 0, 1);
-
-    // crecimiento hasta peak (easeOut), luego decrecimiento (easeIn)
-    if (u <= PARTICLE_PEAK_RATIO) {
-      const p = u / PARTICLE_PEAK_RATIO;
-      const eased = 1 - Math.pow(1 - p, 3);
-      this.size = lerp(this.startSize, this.peakSize, eased);
-    } else {
-      const p = (u - PARTICLE_PEAK_RATIO) / (1 - PARTICLE_PEAK_RATIO);
-      const eased = 1 - Math.pow(p, 2);
-      this.size = lerp(this.peakSize, 0, 1 - eased);
-    }
-
-    this.alpha = 1 - u;
-    return u >= 1.0;
-  }
-  draw() {
-    push();
-    // efecto additivo y brillo psicodélico
-    blendMode(ADD);
-    noStroke();
-    fill(this.h, this.sat, this.bright, this.alpha * 255);
-    // dibujar un círculo con ligera corona (dos tamaños) para glow
-    ellipse(this.x, this.y, this.size, this.size);
-    // un halo sutil
-    fill(this.h, this.sat, min(100, this.bright + 20), this.alpha * 120);
-    ellipse(this.x, this.y, this.size * 1.6, this.size * 1.6);
-    pop();
-  }
-}
-
-function spawnPickupParticles(x, y) {
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
-    particles.push(new Particle(x, y));
-  }
-}
-
-function updateParticles() {
-  if (particles.length === 0) return;
-  const dt = deltaTime; // ms
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const dead = particles[i].update(dt);
-    if (dead) particles.splice(i, 1);
-  }
-}
-
-function drawParticles() {
-  if (particles.length === 0) return;
-  // dibujar con blendMode normal restaurado dentro de cada particula
-  for (let p of particles) p.draw();
-}
-
-function updateMandala() {
-  let timeElapsed = millis() - mandalaTimer;
-  if (timeElapsed > MANDALA_INTERVAL) {
-    mandalaTimer = millis();
-    mandalaFade = 1.0;
-    mandalaHue = random(360);
-    mandalaPos = createVector(player.x, player.y);
-  }
-  let fadeProgress = (millis() - mandalaTimer) / MANDALA_DURATION;
-  if (fadeProgress < 1.0) {mandalaFade = map(fadeProgress, 0, 1, 1.0, 0.0);} else {mandalaFade = 0.0;}
-}
-
-function drawMandala() {
-  if (mandalaFade <= 0) {return;}
-  push();translate(mandalaPos.x, mandalaPos.y);
-  strokeWeight(MANDALA_STROKE_WEIGHT);noFill();
-
-  let petals = 12;
-  let currentRadius = MANDALA_MAX_RADIUS * mandalaFade;
-  let currentAlpha = 255 * mandalaFade;
-  rotate(millis() / 2000.0);
-
-  for (let i = 0; i < petals; i++) {
-    rotate(TWO_PI / petals);
-    stroke(mandalaHue, 90, 90, currentAlpha);
-    ellipse(0, currentRadius / 2, currentRadius / 2, currentRadius / 2);
-    stroke(mandalaHue, 60, 100, currentAlpha);
-    line(0, 0, 0, currentRadius);
-  }
-  pop();
-}
-
-// nueva función: dibuja hitboxes centradas + offsets para player (index 0) y item (index 1)
-function drawHitboxes() {
-  push();
-  noFill();
-  strokeWeight(2);
-  rectMode(CENTER);
-
-  // player hitbox (rojo)
-  stroke(0, 100, 100);
-  const hp = hitboxSizes[0];
-  rect(player.x + (hp.ox || 0), player.y + (hp.oy || 0), hp.w, hp.h);
-
-  // item hitbox: verde si está bloqueada, azul si no
-  const hi = hitboxSizes[1];
-  let ix = item.x;
-  let iy = item.y;
-  if (item && item.attached) {
-    // cuando está puesta, la hitbox sigue la posición del jugador
-    ix = player.x + (hi.ox || 0);
-    iy = player.y + (hi.oy || 0);
-  }
-  if (item && item.pickupLocked) {
-    stroke(120, 100, 80); // verde
-  } else {
-    stroke(200, 100, 100); // azul
-  }
-  rect(ix, iy, hi.w, hi.h);
-
-  pop();
-}
-
-// nueva versión de checkCollision que usa hitboxSizes con offsets (índices opcionales)
-function checkCollision(p, it, pIndex = 0, iIndex = 1) {
-  const hp = hitboxSizes[pIndex];
-  const hi = hitboxSizes[iIndex];
-
-  const px = p.x + (hp.ox || 0);
-  const py = p.y + (hp.oy || 0);
-  const ix = it.x + (hi.ox || 0);
-  const iy = it.y + (hi.oy || 0);
-
-  const bw = hp.w;
-  const bh = hp.h;
-  const iw = hi.w;
-  const ih = hi.h;
-
-  const dx = Math.abs(px - ix);
-  const dy = Math.abs(py - iy);
-
-  const overlapX = dx < (bw + iw) / 2;
-  const overlapY = dy < (bh + ih) / 2;
-  return overlapX && overlapY;
-}
-
-function setBlurPulse(target, duration = BLUR_DEFAULT_DURATION) {
-  blurPulseStart = millis();
-  blurPulseDuration = Math.max(0, duration);
-  blurPulseTarget = target;
-}
-
-// nueva función: dibuja tabla debajo del jugador pero por encima de la capa,
-// usando el mismo índice de frame que el jugador para mantener timing.
 function drawTablaUnderPlayer(playerObj) {
   if (!tablaSpriteSheet) return;
 
-  // calcular frame sincronizado con el jugador
   const frameIndex = playerObj.currentFrame || 0;
   const sx = frameIndex * FRAME_WIDTH;
   const sy = 0;
@@ -972,22 +812,21 @@ function drawTablaUnderPlayer(playerObj) {
   push();
   imageMode(CENTER);
 
-  // posición ligeramente por debajo/centro del jugador (ajusta offsets si hace falta)
-  const offsetY = 6;      // desplaza la tabla verticalmente respecto al centro del jugador
-  const offsetX = 0;      // si quieres desplazar lateralmente según side, ajusta aquí
+  const offsetY = 6;
+  const offsetX = 0;
   const drawX = playerObj.x + offsetX;
   const drawY = playerObj.y + offsetY;
 
-  // tamaño: seguir tamaño del jugador (se puede ajustar)
-  const drawW = playerObj.width * 1.05;
-  const drawH = playerObj.height * 1.05;
+  const drawW = (playerObj.width || FRAME_WIDTH) * 1.05;
+  const drawH = (playerObj.height || FRAME_HEIGHT) * 1.05;
 
-  // si la tabla necesita flip según side para mantener coherencia, aplicarlo:
   if (side === -1) {
-    // voltear horizontalmente alrededor del punto de dibujo
+    // flip horizontal alrededor del punto de dibujo
+    push();
     translate(drawX, drawY);
     scale(-1, 1);
     image(tablaSpriteSheet, 0, 0, drawW, drawH, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
+    pop();
   } else {
     image(tablaSpriteSheet, drawX, drawY, drawW, drawH, sx, sy, FRAME_WIDTH, FRAME_HEIGHT);
   }
